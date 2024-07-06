@@ -9,229 +9,679 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/http"
 	"strconv"
+	"time"
 
-	"github.com/altsaqif/graphql-go/cmd/helpers"
-	"github.com/altsaqif/graphql-go/cmd/middlewares"
-	"github.com/altsaqif/graphql-go/cmd/models"
-	"github.com/altsaqif/graphql-go/graph/model"
+	"github.com/altsaqif/go-graphql/cmd/delivery/middleware"
+	"github.com/altsaqif/go-graphql/cmd/entity"
+	"github.com/altsaqif/go-graphql/cmd/shared/common"
+	"github.com/altsaqif/go-graphql/graph/generated"
+	"github.com/altsaqif/go-graphql/graph/model"
+	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"
+	"gorm.io/gorm"
 )
 
 // Login is the resolver for the login field.
+// @Summary Login user
+// @Description Login user with email and password
+// @Tags Authentication
+// @Accept  json
+// @Produce  json
+// @Param   loginRequest body model.LoginRequest true "Login Request"
+// @Success 200 {object} model.SingleLoginResponse
+// @Failure 400 {object} model.Status
+// @Failure 400 {object} model.Status
+// @Failure 500 {object} model.Status
+// @Router /login [post]
 func (r *mutationResolver) Login(ctx context.Context, input model.LoginRequest) (*model.LoginResponse, error) {
-	var user models.User
+	var user entity.User
+	c := ctx.Value("ginContext").(*gin.Context)
 	if err := r.DB.Where("email = ?", input.Email).First(&user).Error; err != nil {
-		log.Println("User not found")
-		return nil, err
+		common.SendErrorResponse400(c, "Invalid email or password")
+		return nil, nil
 	}
 
-	// Verify password
+	// Validate password (this should be hashed and compared with stored hash)
 	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(input.Password)); err != nil {
-		log.Println("Incorrect password")
-		return nil, err
+		common.SendErrorResponse400(c, "Invalid email or password")
+		return nil, nil
 	}
 
-	// Generate token
-	tokenString, err := helpers.GenerateToken(input.Email)
+	token, err := r.JwtService.CreateToken(&user)
 	if err != nil {
-		log.Println("Failed to generate token")
-		return nil, err
+		common.SendErrorResponse500(c, fmt.Sprintf("Failed to create token: %v", err))
+		return nil, nil
 	}
 
 	// Set token to cookie
-	// helpers.SetCookie(ctx, tokenString)
+	c.SetCookie("token", token, int(time.Hour*72/time.Second), "/", "", false, true)
 
-	return &model.LoginResponse{Token: tokenString}, nil
+	// Construct response
+	loginResponse := &model.LoginResponse{Message: token}
+
+	// Send success response using SendSingleResponse
+	common.SendSingleLoginResponse(c, "Login successful", loginResponse)
+
+	return loginResponse, nil
 }
 
 // Register is the resolver for the register field.
+// @Summary Register a new user
+// @Description Register a new user with the given details
+// @Tags Authentication
+// @Accept json
+// @Produce json
+// @Param registerRequest body model.RegisterRequest true "Register Request"
+// @Success 200 {object} model.SingleRegisterResponse
+// @Failure 400 {object} model.Status
+// @Failure 500 {object} model.Status
+// @Failure 500 {object} model.Status
+// @Router /register [post]
 func (r *mutationResolver) Register(ctx context.Context, input model.RegisterRequest) (*model.RegisterResponse, error) {
-	// Check if email already exists
-	var existingUser models.User
-	if err := r.DB.Where("email = ?", input.Email).First(&existingUser).Error; err == nil {
-		return nil, fmt.Errorf("Email already exists")
+	// Debug: Log the input request
+	log.Printf("Register input: %+v\n", input)
+
+	c := ctx.Value("ginContext").(*gin.Context)
+
+	if input.Password != input.ConfirmPassword {
+		common.SendErrorResponse400(c, "Passwords do not match")
+		return nil, nil
 	}
 
-	// Hash password
+	// Hash the password
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(input.Password), bcrypt.DefaultCost)
 	if err != nil {
-		log.Println("Failed to hash password")
-		return nil, err
+		common.SendErrorResponse500(c, fmt.Sprintf("Failed to hash password: %v", err))
+		return nil, nil
 	}
 
-	// Compare password with confirm_password
-	if err := bcrypt.CompareHashAndPassword(hashedPassword, []byte(input.ConfirmPassword)); err != nil {
-		return nil, fmt.Errorf("Password not matched")
+	user := entity.User{
+		FirstName: input.Firstname,
+		LastName:  input.Lastname,
+		Email:     input.Email,
+		Password:  string(hashedPassword),
+		Role:      input.Role,
 	}
 
-	// Create new user
-	user := models.User{
-		Name:            input.Name,
-		Email:           input.Email,
-		Password:        string(hashedPassword),
-		PasswordConfirm: string(hashedPassword),
-	}
-
-	// Pastikan objek DB tidak nil sebelum menggunakannya
-	if r.DB == nil {
-		return nil, errors.New("DB connection is nil")
-	}
+	// Debug: Log the user entity before saving
+	log.Printf("Creating user: %+v\n", user)
 
 	if err := r.DB.Create(&user).Error; err != nil {
-		log.Println("Failed to create user")
-		return nil, err
+		common.SendErrorResponse500(c, fmt.Sprintf("Failed to create user: %v", err))
+		return nil, nil
 	}
 
-	return &model.RegisterResponse{Message: "User registered successfully"}, nil
+	userResponse := &model.RegisterResponse{
+		ID:        strconv.FormatUint(uint64(user.ID), 10),
+		Firstname: user.FirstName,
+		Lastname:  user.LastName,
+		Email:     user.Email,
+		Role:      user.Role,
+		CreatedAt: formatTime(user.CreatedAt),
+		UpdatedAt: formatTime(user.UpdatedAt),
+		DeletedAt: formatTime(user.DeletedAt.Time),
+	}
+
+	// Send success response using SendCreateResponse
+	common.SendCreateRegisterResponse(c, "User created successfully", userResponse)
+
+	return userResponse, nil
 }
 
 // Logout is the resolver for the logout field.
+// @Summary Logout the current user
+// @Description Clears the authentication token and logs out the current user
+// @Tags Authentication
+// @Accept json
+// @Produce json
+// @Param logoutRequest body model.LogoutRequest true "Logout Request"
+// @Success 200 {object} model.SingleLogoutResponse
+// @Router /logout [post]
 func (r *mutationResolver) Logout(ctx context.Context, input model.LogoutRequest) (*model.LogoutResponse, error) {
-	// helpers.DeleteCookie(ctx, "token")
+	// Retrieve gin context from resolver context
+	c := ctx.Value("ginContext").(*gin.Context)
+
 	// Clear token from cookie
-	helpers.ClearCookie(ctx)
-	return &model.LogoutResponse{Message: "Logged out successfully"}, nil
+	c.SetCookie("token", "", -1, "/", "", false, true)
+
+	// Create logout response
+	logoutResponse := &model.LogoutResponse{Message: "Successfully logged out"}
+
+	// Send success response
+	common.SendSuccessLogoutResponse(c, logoutResponse)
+
+	return logoutResponse, nil
 }
 
 // CreateProduct is the resolver for the createProduct field.
+// @Summary Create a new product
+// @Description Creates a new product and associates it with the current user
+// @Tags Products
+// @Accept json
+// @Produce json
+// @Param productRequest body model.ProductRequest true "Product Request"
+// @Success 201 {object} model.SingleProductResponse
+// @Failure 401 {object} model.Status
+// @Failure 500 {object} model.Status
+// @Router /product [post]
 func (r *mutationResolver) CreateProduct(ctx context.Context, input model.ProductRequest) (*model.ProductResponse, error) {
-	// Get user from context
-	user := middlewares.ForContext(ctx)
-	if user == nil {
-		return &model.ProductResponse{}, fmt.Errorf("Access denied")
+	// Retrieve user from context
+	user, err := middleware.GetUserFromContext(ctx)
+	if err != nil {
+		// Send error response for unauthorized access
+		c := ctx.Value("ginContext").(*gin.Context)
+		common.SendErrorResponse401(c, "Unauthorized")
+		return nil, err
 	}
 
-	// Check if product with the same ID already exists
-	var existingProduct models.Product
-	if err := r.DB.Where("name = ?", input.Name).First(&existingProduct).Error; err == nil {
-		return nil, fmt.Errorf("Product with the same Name already exists")
+	// Create the product entity
+	product := entity.Product{
+		Name:        input.Name,
+		Description: input.Description,
+		Stock:       input.Stock,
+		Price:       input.Price,
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
+		Users:       []*entity.User{user}, // Add user to product relationship
 	}
 
-	// Create new product
-	product := models.Product{
-		Name:  input.Name,
-		Stock: float64(input.Stock),
-		Price: input.Price,
-	}
+	// Save the product to the database
 	if err := r.DB.Create(&product).Error; err != nil {
-		return nil, fmt.Errorf("Failed to create product")
+		// Send error response for internal server error
+		c := ctx.Value("ginContext").(*gin.Context)
+		common.SendErrorResponse500(c, "Failed to create product")
+		return nil, err
 	}
 
-	return &model.ProductResponse{
-		ID:    strconv.Itoa(product.ID),
-		Name:  product.Name,
-		Stock: int(product.Stock),
-		Price: product.Price,
-	}, nil
+	// Prepare the product response
+	productResponse := &model.ProductResponse{
+		ID:          strconv.FormatUint(uint64(product.ID), 10),
+		Name:        product.Name,
+		Description: product.Description,
+		Stock:       product.Stock,
+		Price:       product.Price,
+		CreatedAt:   formatTime(product.CreatedAt),
+		UpdatedAt:   formatTime(product.UpdatedAt),
+		DeletedAt:   formatDeletedAt(product.DeletedAt),
+		CreatedBy: &model.UserResponse{
+			ID:        strconv.FormatUint(uint64(user.ID), 10),
+			Firstname: user.FirstName,
+			Lastname:  user.LastName,
+			Email:     user.Email,
+			Password:  user.Password,
+			Role:      user.Role,
+			CreatedAt: formatTime(user.CreatedAt),
+			UpdatedAt: formatTime(user.UpdatedAt),
+			DeletedAt: formatDeletedAt(user.DeletedAt),
+		},
+	}
+
+	// Send create response
+	c := ctx.Value("ginContext").(*gin.Context)
+	common.SendCreateProductResponse(c, "Product created successfully", productResponse)
+
+	return productResponse, nil
 }
 
 // UpdateProduct is the resolver for the updateProduct field.
+// @Summary Update an existing product
+// @Description Updates the fields of an existing product and associates the current user with it
+// @Tags Products
+// @Accept json
+// @Produce json
+// @Param id path string true "Product ID"
+// @Param productRequest body model.ProductRequest true "Product Request"
+// @Success 200 {object} model.SingleProductResponse
+// @Failure 401 {object} model.Status
+// @Failure 404 {object} model.Status
+// @Failure 500 {object} model.Status
+// @Failure 500 {object} model.Status
+// @Router /product/{id} [put]
 func (r *mutationResolver) UpdateProduct(ctx context.Context, id string, input model.ProductRequest) (*model.ProductResponse, error) {
-	// Get user from context
-	user := middlewares.ForContext(ctx)
-	if user == nil {
-		return &model.ProductResponse{}, fmt.Errorf("Access denied")
+	var product entity.Product
+	if err := r.DB.Where("id = ?", id).First(&product).Error; err != nil {
+		// Send error response for product not found
+		c := ctx.Value("ginContext").(*gin.Context)
+		common.SendErrorResponse404(c, "Product not found")
+		return nil, fmt.Errorf("product not found")
 	}
 
-	// Check if product exists
-	var existingProduct models.Product
-	if err := r.DB.Where("id = ?", id).First(&existingProduct).Error; err != nil {
-		return nil, fmt.Errorf("Product not found")
+	// Retrieve user from context
+	user, err := middleware.GetUserFromContext(ctx)
+	if err != nil {
+		// Send error response for unauthorized access
+		c := ctx.Value("ginContext").(*gin.Context)
+		common.SendErrorResponse401(c, "Unauthorized")
+		return nil, fmt.Errorf("failed to get user from context: %v", err)
 	}
 
-	// Update product details
-	existingProduct.Name = input.Name
-	existingProduct.Stock = float64(input.Stock)
-	existingProduct.Price = input.Price
+	// Update product fields
+	product.Name = input.Name
+	product.Description = input.Description
+	product.Stock = input.Stock
+	product.Price = input.Price
+	product.UpdatedAt = time.Now()
 
-	// Save changes
-	if err := r.DB.Save(&existingProduct).Error; err != nil {
-		return nil, fmt.Errorf("Failed to update product")
+	if err := r.DB.Save(&product).Error; err != nil {
+		// Send error response for internal server error
+		c := ctx.Value("ginContext").(*gin.Context)
+		common.SendErrorResponse500(c, "Failed to update product")
+		return nil, err
 	}
 
-	return &model.ProductResponse{
-		ID:    strconv.Itoa(existingProduct.ID),
-		Name:  existingProduct.Name,
-		Stock: int(existingProduct.Stock),
-		Price: existingProduct.Price,
-	}, nil
+	// Add user to product's users if not already added
+	if err := r.DB.Model(&product).Association("Users").Append(user); err != nil {
+		// Send error response for internal server error
+		c := ctx.Value("ginContext").(*gin.Context)
+		common.SendErrorResponse500(c, "Failed to add user to product")
+		return nil, fmt.Errorf("failed to add user to product: %v", err)
+	}
+
+	// Prepare the product response
+	productResponse := &model.ProductResponse{
+		ID:          strconv.FormatUint(uint64(product.ID), 10),
+		Name:        product.Name,
+		Description: product.Description,
+		Stock:       product.Stock,
+		Price:       product.Price,
+		CreatedAt:   formatTime(product.CreatedAt),
+		UpdatedAt:   formatTime(product.UpdatedAt),
+		DeletedAt:   formatDeletedAt(product.DeletedAt),
+		CreatedBy: &model.UserResponse{
+			ID:        strconv.FormatUint(uint64(user.ID), 10),
+			Firstname: user.FirstName,
+			Lastname:  user.LastName,
+			Email:     user.Email,
+			Password:  user.Password,
+			Role:      user.Role,
+			CreatedAt: formatTime(user.CreatedAt),
+			UpdatedAt: formatTime(user.UpdatedAt),
+			DeletedAt: formatDeletedAt(user.DeletedAt),
+		},
+		Users: []*model.UserResponse{},
+	}
+
+	// Populate the users field in the product response
+	for _, u := range product.Users {
+		productResponse.Users = append(productResponse.Users, &model.UserResponse{
+			ID:        strconv.FormatUint(uint64(u.ID), 10),
+			Firstname: u.FirstName,
+			Lastname:  u.LastName,
+			Email:     u.Email,
+			Password:  u.Password,
+			Role:      u.Role,
+			CreatedAt: formatTime(u.CreatedAt),
+			UpdatedAt: formatTime(u.UpdatedAt),
+			DeletedAt: formatDeletedAt(u.DeletedAt),
+		})
+	}
+
+	// Send success response
+	c := ctx.Value("ginContext").(*gin.Context)
+	common.SendSuccessProductResponse(c, productResponse)
+
+	return productResponse, nil
 }
 
 // DeleteProduct is the resolver for the deleteProduct field.
+// @Summary Delete a product by ID
+// @Description Deletes a product based on its unique ID
+// @Tags Products
+// @Accept json
+// @Produce json
+// @Param id path string true "Product ID"
+// @Success 200 {object} model.Status
+// @Failure 404 {object} model.Status
+// @Failure 500 {object} model.Status
+// @Failure 500 {object} model.Status
+// @Router /product/{id} [delete]
 func (r *mutationResolver) DeleteProduct(ctx context.Context, id string) (*model.Status, error) {
-	// Get user from context
-	user := middlewares.ForContext(ctx)
-	if user == nil {
-		return &model.Status{}, fmt.Errorf("Access denied")
+	// Check if the product exists
+	var product entity.Product
+	if err := r.DB.Where("id = ?", id).First(&product).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			// Send error response for product not found
+			c := ctx.Value("ginContext").(*gin.Context)
+			common.SendErrorResponse404(c, "Product not found")
+			return nil, fmt.Errorf("product not found")
+		}
+		// Send error response for internal server error
+		c := ctx.Value("ginContext").(*gin.Context)
+		common.SendErrorResponse500(c, "Failed to retrieve product")
+		return nil, fmt.Errorf("failed to retrieve product: %v", err)
 	}
 
-	// Check if product exists
-	var existingProduct models.Product
-	if err := r.DB.Where("id = ?", id).First(&existingProduct).Error; err != nil {
-		return nil, fmt.Errorf("Product not found")
+	// Delete the product
+	if err := r.DB.Delete(&product).Error; err != nil {
+		// Send error response for internal server error
+		c := ctx.Value("ginContext").(*gin.Context)
+		common.SendErrorResponse500(c, "Failed to delete product")
+		return nil, fmt.Errorf("failed to delete product: %v", err)
 	}
 
-	// Delete product
-	if err := r.DB.Delete(&existingProduct).Error; err != nil {
-		return nil, fmt.Errorf("Failed to delete product")
-	}
+	// Send success response
+	c := ctx.Value("ginContext").(*gin.Context)
+	common.SendSuccessDeleteProductResponse(c, &model.Status{Code: http.StatusOK, Message: "Product deleted successfully"})
 
-	return &model.Status{Status: "Product deleted successfully"}, nil
+	return &model.Status{Code: http.StatusOK, Message: "Product deleted successfully"}, nil
 }
 
-// GetProductByID is the resolver for the getProductByID field.
-func (r *queryResolver) GetProductByID(ctx context.Context, id string) (*model.ProductResponse, error) {
-	// Get user from context
-	user := middlewares.ForContext(ctx)
-	if user == nil {
-		return &model.ProductResponse{}, fmt.Errorf("Access denied")
+// GetAllUsers is the resolver for the getAllUsers field.
+// @Summary Get all users
+// @Description Retrieves a list of all users with optional pagination
+// @Tags Profiles
+// @Accept json
+// @Produce json
+// @Param limit query int false "Limit number of users per page"
+// @Param offset query int false "Offset number of users for pagination"
+// @Success 200 {object} model.UserListResponse
+// @Failure 500 {object} model.Status
+// @Failure 500 {object} model.Status
+// @Router /users [get]
+func (r *queryResolver) GetAllUsers(ctx context.Context, limit int, offset int) (*model.UserListResponse, error) {
+	var users []entity.User
+	c := ctx.Value("ginContext").(*gin.Context)
+	if err := r.DB.Preload("Products").Offset(offset).Limit(limit).Find(&users).Error; err != nil {
+		common.SendErrorResponse500(c, "Failed to fetch product")
+		return nil, fmt.Errorf("failed to fetch product: %v", err)
 	}
 
-	var product models.Product
-	if err := r.DB.Where("id = ?", id).First(&product).Error; err != nil {
-		return nil, fmt.Errorf("Product not found")
+	var userResponses []*model.UserResponse
+	for _, u := range users {
+		var products []*model.ProductResponse
+		for _, p := range u.Products {
+			products = append(products, &model.ProductResponse{
+				ID:          strconv.FormatUint(uint64(p.ID), 10),
+				Name:        p.Name,
+				Description: p.Description,
+				Stock:       p.Stock,
+				Price:       p.Price,
+				CreatedAt:   formatTime(p.CreatedAt),
+				UpdatedAt:   formatTime(p.UpdatedAt),
+				DeletedAt:   formatDeletedAt(p.DeletedAt),
+			})
+		}
+
+		userResponses = append(userResponses, &model.UserResponse{
+			ID:        strconv.FormatUint(uint64(u.ID), 10),
+			Firstname: u.FirstName,
+			Lastname:  u.LastName,
+			Email:     u.Email,
+			Password:  u.Password,
+			Role:      u.Role,
+			CreatedAt: formatTime(u.CreatedAt),
+			UpdatedAt: formatTime(u.UpdatedAt),
+			DeletedAt: formatDeletedAt(u.DeletedAt),
+			Products:  products,
+		})
 	}
 
-	return &model.ProductResponse{
-		ID:    strconv.Itoa(product.ID),
-		Name:  product.Name,
-		Stock: int(product.Stock),
-		Price: product.Price,
-	}, nil
+	var total int64
+	if err := r.DB.Model(&entity.User{}).Count(&total).Error; err != nil {
+		common.SendErrorResponse500(c, "Failed to fetch data user")
+		return nil, fmt.Errorf("failed to fetch data user: %v", err)
+	}
+
+	payload := &model.UserListResponse{
+		Total:  int(total),
+		Limit:  limit,
+		Offset: offset,
+		Users:  userResponses,
+	}
+
+	common.SendPagedUserResponse(c, int(total), limit, offset, userResponses)
+
+	return payload, nil
+}
+
+// GetUserByID is the resolver for the getUserByID field.
+// @Summary Get user by ID
+// @Description Retrieves a user by their ID
+// @Tags Profiles
+// @Accept json
+// @Produce json
+// @Param id path string true "User ID"
+// @Success 200 {object} model.SingleUserResponse
+// @Failure 404 {object} model.Status
+// @Router /users/{id} [get]
+func (r *queryResolver) GetUserByID(ctx context.Context, id string) (*model.UserResponse, error) {
+	var user entity.User
+	c := ctx.Value("ginContext").(*gin.Context)
+	if err := r.DB.Preload("Products").Where("id = ?", id).First(&user).Error; err != nil {
+		common.SendErrorResponse404(c, "User not found")
+		return nil, fmt.Errorf("user not found: %v", err)
+	}
+
+	// Construct user response
+	userResponse := &model.UserResponse{
+		ID:        strconv.FormatUint(uint64(user.ID), 10),
+		Firstname: user.FirstName,
+		Lastname:  user.LastName,
+		Email:     user.Email,
+		Password:  user.Password,
+		Role:      user.Role,
+		CreatedAt: formatTime(user.CreatedAt),
+		UpdatedAt: formatTime(user.UpdatedAt),
+		DeletedAt: formatDeletedAt(user.DeletedAt),
+		Products:  []*model.ProductResponse{},
+	}
+
+	// Populate the products field in the user response
+	for _, p := range user.Products {
+		userResponse.Products = append(userResponse.Products, &model.ProductResponse{
+			ID:          strconv.FormatUint(uint64(p.ID), 10),
+			Name:        p.Name,
+			Description: p.Description,
+			Stock:       p.Stock,
+			Price:       p.Price,
+			CreatedAt:   formatTime(p.CreatedAt),
+			UpdatedAt:   formatTime(p.UpdatedAt),
+			DeletedAt:   formatDeletedAt(p.DeletedAt),
+		})
+	}
+
+	// Send success response using SendSuccessResponse
+	common.SendSuccessUserResponse(c, userResponse)
+
+	return userResponse, nil
 }
 
 // GetAllProducts is the resolver for the getAllProducts field.
-func (r *queryResolver) GetAllProducts(ctx context.Context) ([]*model.ProductResponse, error) {
-	// Get user from context
-	user := middlewares.ForContext(ctx)
-	if user == nil {
-		return []*model.ProductResponse{}, fmt.Errorf("Access denied")
-	}
-
-	var products []*models.Product
-	if err := r.DB.Find(&products).Error; err != nil {
-		return nil, fmt.Errorf("Failed to get products")
+// @Summary Get all products
+// @Description Retrieves all products with pagination support
+// @Tags Products
+// @Accept json
+// @Produce json
+// @Param limit query int false "Limit"
+// @Param offset query int false "Offset"
+// @Success 200 {object} model.ProductListResponse
+// @Failure 500 {object} model.Status
+// @Router /products [get]
+func (r *queryResolver) GetAllProducts(ctx context.Context, limit int, offset int) (*model.ProductListResponse, error) {
+	var products []entity.Product
+	c := ctx.Value("ginContext").(*gin.Context)
+	if err := r.DB.Preload("Users").Limit(limit).Offset(offset).Find(&products).Error; err != nil {
+		common.SendErrorResponse500(c, "Failed to fetch product")
+		return nil, fmt.Errorf("failed to fetch product: %v", err)
 	}
 
 	var productResponses []*model.ProductResponse
 	for _, p := range products {
-		productResponses = append(productResponses, &model.ProductResponse{
-			ID:    strconv.Itoa(p.ID),
-			Name:  p.Name,
-			Stock: int(p.Stock),
-			Price: p.Price,
-		})
+		productResponse := &model.ProductResponse{
+			ID:          strconv.FormatUint(uint64(p.ID), 10),
+			Name:        p.Name,
+			Description: p.Description,
+			Stock:       p.Stock,
+			Price:       p.Price,
+			CreatedAt:   formatTime(p.CreatedAt),
+			UpdatedAt:   formatTime(p.UpdatedAt),
+			DeletedAt:   formatDeletedAt(p.DeletedAt),
+			Users:       []*model.UserResponse{},
+		}
+
+		for _, u := range p.Users {
+			userResponse := &model.UserResponse{
+				ID:        strconv.FormatUint(uint64(u.ID), 10),
+				Firstname: u.FirstName,
+				Lastname:  u.LastName,
+				Email:     u.Email,
+				Password:  u.Password,
+				Role:      u.Role,
+				CreatedAt: formatTime(u.CreatedAt),
+				UpdatedAt: formatTime(u.UpdatedAt),
+				DeletedAt: formatDeletedAt(u.DeletedAt),
+			}
+			productResponse.Users = append(productResponse.Users, userResponse)
+		}
+
+		productResponses = append(productResponses, productResponse)
 	}
+
+	totalProducts := int64(0)
+	r.DB.Model(&entity.Product{}).Count(&totalProducts)
+
+	payload := &model.ProductListResponse{
+		Total:    int(totalProducts),
+		Limit:    limit,
+		Offset:   offset,
+		Products: productResponses,
+	}
+
+	common.SendPagedProductResponse(c, int(totalProducts), limit, offset, productResponses)
+
+	return payload, nil
+}
+
+// GetProductByID is the resolver for the getProductByID field.
+// @Summary Get a product by ID
+// @Description Retrieves a product by its ID
+// @Tags Products
+// @Accept json
+// @Produce json
+// @Param id path string true "Product ID"
+// @Success 200 {object} model.SingleProductResponse
+// @Failure 404 {object} model.Status
+// @Router /product/{id} [get]
+func (r *queryResolver) GetProductByID(ctx context.Context, id string) (*model.ProductResponse, error) {
+	var product entity.Product
+	c := ctx.Value("ginContext").(*gin.Context)
+	if err := r.DB.Preload("Users").Where("id = ?", id).First(&product).Error; err != nil {
+		common.SendErrorResponse404(c, "Product not found")
+		return nil, fmt.Errorf("product not found: %v", err)
+	}
+
+	productResponse := &model.ProductResponse{
+		ID:          strconv.FormatUint(uint64(product.ID), 10),
+		Name:        product.Name,
+		Description: product.Description,
+		Stock:       product.Stock,
+		Price:       product.Price,
+		CreatedAt:   formatTime(product.CreatedAt),
+		UpdatedAt:   formatTime(product.UpdatedAt),
+		DeletedAt:   formatDeletedAt(product.DeletedAt),
+		Users:       []*model.UserResponse{},
+	}
+
+	for _, u := range product.Users {
+		userResponse := &model.UserResponse{
+			ID:        strconv.FormatUint(uint64(u.ID), 10),
+			Firstname: u.FirstName,
+			Lastname:  u.LastName,
+			Email:     u.Email,
+			Password:  u.Password,
+			Role:      u.Role,
+			CreatedAt: formatTime(u.CreatedAt),
+			UpdatedAt: formatTime(u.UpdatedAt),
+			DeletedAt: formatDeletedAt(u.DeletedAt),
+		}
+		productResponse.Users = append(productResponse.Users, userResponse)
+	}
+
+	// Send success response using SendSuccessResponse
+	common.SendSuccessProductResponse(c, productResponse)
+
+	return productResponse, nil
+}
+
+// GetProductByStock is the resolver for the getProductByStock field.
+// @Summary Get products by stock quantity
+// @Description Retrieves products that match the specified stock quantity
+// @Tags Products
+// @Accept json
+// @Produce json
+// @Param stock query integer true "Stock quantity"
+// @Success 200 {array} model.AnyProductResponse
+// @Failure 404 {object} model.Status
+// @Router /products/by-stock [get]
+func (r *queryResolver) GetProductByStock(ctx context.Context, stock model.Stock) ([]*model.ProductResponse, error) {
+	var products []entity.Product
+	c := ctx.Value("ginContext").(*gin.Context)
+	if err := r.DB.Preload("Users").Where("stock = ?", stock.Stock).Find(&products).Error; err != nil {
+		common.SendErrorResponse404(c, "Stock not found")
+		return nil, fmt.Errorf("stock not found: %v", err)
+	}
+
+	var productResponses []*model.ProductResponse
+	for _, product := range products {
+		productResponse := &model.ProductResponse{
+			ID:          strconv.FormatUint(uint64(product.ID), 10),
+			Name:        product.Name,
+			Description: product.Description,
+			Stock:       product.Stock,
+			Price:       product.Price,
+			CreatedAt:   formatTime(product.CreatedAt),
+			UpdatedAt:   formatTime(product.UpdatedAt),
+			DeletedAt:   formatDeletedAt(product.DeletedAt),
+			Users:       []*model.UserResponse{},
+		}
+
+		for _, u := range product.Users {
+			userResponse := &model.UserResponse{
+				ID:        strconv.FormatUint(uint64(u.ID), 10),
+				Firstname: u.FirstName,
+				Lastname:  u.LastName,
+				Email:     u.Email,
+				Password:  u.Password,
+				Role:      u.Role,
+				CreatedAt: formatTime(u.CreatedAt),
+				UpdatedAt: formatTime(u.UpdatedAt),
+				DeletedAt: formatDeletedAt(u.DeletedAt),
+			}
+			productResponse.Users = append(productResponse.Users, userResponse)
+		}
+
+		productResponses = append(productResponses, productResponse)
+	}
+
+	// Send success response using SendSuccessResponse
+	common.SendSuccessProductByStockResponse(c, productResponses)
 
 	return productResponses, nil
 }
 
-// Mutation returns MutationResolver implementation.
-func (r *Resolver) Mutation() MutationResolver { return &mutationResolver{r} }
+// Mutation returns generated.MutationResolver implementation.
+func (r *Resolver) Mutation() generated.MutationResolver { return &mutationResolver{r} }
 
-// Query returns QueryResolver implementation.
-func (r *Resolver) Query() QueryResolver { return &queryResolver{r} }
+// Query returns generated.QueryResolver implementation.
+func (r *Resolver) Query() generated.QueryResolver { return &queryResolver{r} }
 
 type mutationResolver struct{ *Resolver }
 type queryResolver struct{ *Resolver }
+
+// !!! WARNING !!!
+// The code below was going to be deleted when updating resolvers. It has been copied here so you have
+// one last chance to move it out of harms way if you want. There are two reasons this happens:
+//   - When renaming or deleting a resolver the old code will be put in here. You can safely delete
+//     it when you're done.
+//   - You have helper methods in this file. Move them out to keep these resolver files clean.
+func formatTime(t time.Time) string {
+	return t.Format(time.RFC3339)
+}
+func formatDeletedAt(deletedAt gorm.DeletedAt) string {
+	if deletedAt.Valid {
+		return formatTime(deletedAt.Time)
+	}
+	return ""
+}

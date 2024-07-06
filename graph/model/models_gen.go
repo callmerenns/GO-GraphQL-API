@@ -2,13 +2,30 @@
 
 package model
 
+type AnyProductResponse struct {
+	Status *Status            `json:"status"`
+	Data   []*ProductResponse `json:"data,omitempty"`
+}
+
+type AnyUserResponse struct {
+	Status *Status         `json:"status"`
+	Data   []*UserResponse `json:"data,omitempty"`
+}
+
+type Enrollment struct {
+	UserID    string           `json:"userId"`
+	ProductID string           `json:"productId"`
+	User      *UserResponse    `json:"user"`
+	Product   *ProductResponse `json:"product"`
+}
+
 type LoginRequest struct {
 	Email    string `json:"email"`
 	Password string `json:"password"`
 }
 
 type LoginResponse struct {
-	Token string `json:"token"`
+	Message string `json:"message"`
 }
 
 type LogoutRequest struct {
@@ -22,33 +39,107 @@ type LogoutResponse struct {
 type Mutation struct {
 }
 
+type ProductListResponse struct {
+	Products []*ProductResponse `json:"products"`
+	Total    int                `json:"total"`
+	Limit    int                `json:"limit"`
+	Offset   int                `json:"offset"`
+}
+
 type ProductRequest struct {
-	Name  string  `json:"name"`
-	Stock int     `json:"stock"`
-	Price float64 `json:"price"`
+	Name        string  `json:"name"`
+	Description string  `json:"description"`
+	Stock       int     `json:"stock"`
+	Price       float64 `json:"price"`
 }
 
 type ProductResponse struct {
-	ID    string  `json:"id"`
-	Name  string  `json:"name"`
-	Stock int     `json:"stock"`
-	Price float64 `json:"price"`
+	ID          string          `json:"id"`
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	Stock       int             `json:"stock"`
+	Price       float64         `json:"price"`
+	CreatedAt   string          `json:"createdAt"`
+	UpdatedAt   string          `json:"updatedAt"`
+	DeletedAt   string          `json:"deletedAt"`
+	CreatedBy   *UserResponse   `json:"createdBy"`
+	Users       []*UserResponse `json:"users"`
 }
 
 type Query struct {
 }
 
 type RegisterRequest struct {
-	Name            string `json:"name"`
+	Firstname       string `json:"firstname"`
+	Lastname        string `json:"lastname"`
 	Email           string `json:"email"`
 	Password        string `json:"password"`
 	ConfirmPassword string `json:"confirmPassword"`
+	Role            string `json:"role"`
 }
 
 type RegisterResponse struct {
-	Message string `json:"message"`
+	ID        string             `json:"id"`
+	Firstname string             `json:"firstname"`
+	Lastname  string             `json:"lastname"`
+	Email     string             `json:"email"`
+	Role      string             `json:"role"`
+	Products  []*ProductResponse `json:"products"`
+	CreatedAt string             `json:"createdAt"`
+	UpdatedAt string             `json:"updatedAt"`
+	DeletedAt string             `json:"deletedAt"`
+}
+
+type SingleLoginResponse struct {
+	Status *Status        `json:"status"`
+	Data   *LoginResponse `json:"data,omitempty"`
+}
+
+type SingleLogoutResponse struct {
+	Status *Status         `json:"status"`
+	Data   *LogoutResponse `json:"data,omitempty"`
+}
+
+type SingleProductResponse struct {
+	Status *Status          `json:"status"`
+	Data   *ProductResponse `json:"data,omitempty"`
+}
+
+type SingleRegisterResponse struct {
+	Status *Status           `json:"status"`
+	Data   *RegisterResponse `json:"data,omitempty"`
+}
+
+type SingleUserResponse struct {
+	Status *Status       `json:"status"`
+	Data   *UserResponse `json:"data,omitempty"`
 }
 
 type Status struct {
-	Status string `json:"status"`
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+}
+
+type Stock struct {
+	Stock int `json:"stock"`
+}
+
+type UserListResponse struct {
+	Total  int             `json:"total"`
+	Limit  int             `json:"limit"`
+	Offset int             `json:"offset"`
+	Users  []*UserResponse `json:"users"`
+}
+
+type UserResponse struct {
+	ID        string             `json:"id"`
+	Firstname string             `json:"firstname"`
+	Lastname  string             `json:"lastname"`
+	Email     string             `json:"email"`
+	Password  string             `json:"password"`
+	Role      string             `json:"role"`
+	CreatedAt string             `json:"createdAt"`
+	UpdatedAt string             `json:"updatedAt"`
+	DeletedAt string             `json:"deletedAt"`
+	Products  []*ProductResponse `json:"products"`
 }

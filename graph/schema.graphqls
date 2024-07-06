@@ -2,28 +2,40 @@
 #
 # https://gqlgen.com/getting-started/
 
+directive @auth on FIELD_DEFINITION
+
 schema {
   query: Query
   mutation: Mutation
 }
 
+scalar DateTime
+scalar JSON
+
 type Query {
-  getProductByID(id: ID!): ProductResponse!
-  getAllProducts: [ProductResponse!]!
+  # Query User
+  getAllUsers(limit: Int!, offset: Int!): UserListResponse! @auth
+  getUserByID(id: ID!): UserResponse! @auth
+
+  # Query Product
+  getAllProducts(limit: Int!, offset: Int!): ProductListResponse! @auth
+  getProductByID(id: ID!): ProductResponse! @auth
+  getProductByStock(stock: Stock!): [ProductResponse!]! @auth
 }
 
 type Mutation {
   login(input: LoginRequest!): LoginResponse!
   register(input: RegisterRequest!): RegisterResponse!
-  logout(input: LogoutRequest!): LogoutResponse!
+  logout(input: LogoutRequest!): LogoutResponse! 
 
-  createProduct(input: ProductRequest!): ProductResponse!
-  updateProduct(id: ID!, input: ProductRequest!): ProductResponse!
-  deleteProduct(id: ID!): Status!
+  createProduct(input: ProductRequest!): ProductResponse! @auth
+  updateProduct(id: ID!, input: ProductRequest!): ProductResponse! @auth
+  deleteProduct(id: ID!): Status! @auth
 }
 
 input ProductRequest {
   name: String!
+  description: String!
   stock: Int!
   price: Float!
 }
@@ -31,8 +43,21 @@ input ProductRequest {
 type ProductResponse {
   id: ID!
   name: String!
+  description: String!
   stock: Int!
   price: Float!
+  createdAt: DateTime!
+  updatedAt: DateTime!
+  deletedAt: DateTime!
+  createdBy: UserResponse!
+  users: [UserResponse!]!
+}
+
+type ProductListResponse {
+  products: [ProductResponse!]!
+	total: Int!
+	limit: Int!,
+	offset: Int!,
 }
 
 input LoginRequest {
@@ -41,18 +66,55 @@ input LoginRequest {
 }
 
 type LoginResponse {
-  token: String!
+  message: String!
 }
 
 input RegisterRequest {
-  name: String!
+  firstname: String!
+  lastname: String!
   email: String!
   password: String!
   confirmPassword: String!
+  role: String!
 }
 
 type RegisterResponse {
-  message: String!
+  id: ID!
+  firstname: String!
+  lastname: String!
+  email: String!
+  role: String!
+  products: [ProductResponse!]!
+  createdAt: DateTime!
+  updatedAt: DateTime!
+  deletedAt: DateTime!
+}
+
+type UserResponse {
+  id: ID!
+  firstname: String!
+  lastname: String!
+  email: String!
+  password: String!
+  role: String!
+  createdAt: DateTime!
+  updatedAt: DateTime!
+  deletedAt: DateTime!
+  products: [ProductResponse!]!
+}
+
+type UserListResponse {
+	total: Int!
+	limit: Int!,
+	offset: Int!,
+  users: [UserResponse!]!
+}
+
+type Enrollment {
+  userId: ID!
+  productId: ID!
+  user: UserResponse!
+  product: ProductResponse!
 }
 
 input LogoutRequest {
@@ -64,5 +126,45 @@ type LogoutResponse {
 }
 
 type Status {
-  status: String!
+  code: Int!
+  message: String!
+}
+
+type SingleLoginResponse {
+  status: Status!
+  data: LoginResponse
+}
+
+type SingleRegisterResponse {
+  status: Status!
+  data: RegisterResponse
+}
+
+type SingleLogoutResponse {
+  status: Status!
+  data: LogoutResponse
+}
+
+type SingleProductResponse {
+  status: Status!
+  data: ProductResponse
+}
+
+type AnyProductResponse {
+  status: Status!
+  data: [ProductResponse]
+}
+
+type SingleUserResponse {
+  status: Status!
+  data: UserResponse
+}
+
+type AnyUserResponse {
+  status: Status!
+  data: [UserResponse]
+}
+
+input Stock {
+  stock: Int!
 }

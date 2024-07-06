@@ -4,8 +4,8 @@ schema:
 
 # Where should the generated server code go?
 exec:
-  filename: graph/generated.go
-  package: graph
+  filename: graph/generated/generated.go
+  package: generated
 
 # Uncomment to enable federation
 # federation:
@@ -25,6 +25,10 @@ resolver:
   filename_template: "{name}.resolvers.go"
   # Optional: turn on to not generate template comments above resolvers
   # omit_template_comment: false
+
+directives:
+  auth:
+    implementation: github.com/altsaqif/go-graphql/cmd/delivery/middleware.(*AuthMiddleware).AuthDirective
 
 # Optional: turn on use ` + "`" + `gqlgen:"fieldName"` + "`" + ` tags in your models
 # struct_tag: json
@@ -85,3 +89,6 @@ models:
       - github.com/99designs/gqlgen/graphql.Int
       - github.com/99designs/gqlgen/graphql.Int64
       - github.com/99designs/gqlgen/graphql.Int32
+  # JSON:
+  #   model: 
+  #     - github.com/99designs/gqlgen/graphql.JSON

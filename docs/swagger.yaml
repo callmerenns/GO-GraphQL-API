@@ -1,0 +1,529 @@
+basePath: /
+definitions:
+  github_com_altsaqif_go-graphql_graph_model.Status:
+    properties:
+      code:
+        type: integer
+      message:
+        type: string
+    type: object
+  model.AnyProductResponse:
+    properties:
+      data:
+        items:
+          $ref: '#/definitions/model.ProductResponse'
+        type: array
+      status:
+        $ref: '#/definitions/github_com_altsaqif_go-graphql_graph_model.Status'
+    type: object
+  model.LoginRequest:
+    properties:
+      email:
+        type: string
+      password:
+        type: string
+    type: object
+  model.LoginResponse:
+    properties:
+      message:
+        type: string
+    type: object
+  model.LogoutRequest:
+    properties:
+      token:
+        type: string
+    type: object
+  model.LogoutResponse:
+    properties:
+      message:
+        type: string
+    type: object
+  model.ProductListResponse:
+    properties:
+      limit:
+        type: integer
+      offset:
+        type: integer
+      products:
+        items:
+          $ref: '#/definitions/model.ProductResponse'
+        type: array
+      total:
+        type: integer
+    type: object
+  model.ProductRequest:
+    properties:
+      description:
+        type: string
+      name:
+        type: string
+      price:
+        type: number
+      stock:
+        type: integer
+    type: object
+  model.ProductResponse:
+    properties:
+      createdAt:
+        type: string
+      createdBy:
+        $ref: '#/definitions/model.UserResponse'
+      deletedAt:
+        type: string
+      description:
+        type: string
+      id:
+        type: string
+      name:
+        type: string
+      price:
+        type: number
+      stock:
+        type: integer
+      updatedAt:
+        type: string
+      users:
+        items:
+          $ref: '#/definitions/model.UserResponse'
+        type: array
+    type: object
+  model.RegisterRequest:
+    properties:
+      confirmPassword:
+        type: string
+      email:
+        type: string
+      firstname:
+        type: string
+      lastname:
+        type: string
+      password:
+        type: string
+      role:
+        type: string
+    type: object
+  model.RegisterResponse:
+    properties:
+      createdAt:
+        type: string
+      deletedAt:
+        type: string
+      email:
+        type: string
+      firstname:
+        type: string
+      id:
+        type: string
+      lastname:
+        type: string
+      products:
+        items:
+          $ref: '#/definitions/model.ProductResponse'
+        type: array
+      role:
+        type: string
+      updatedAt:
+        type: string
+    type: object
+  model.SingleLoginResponse:
+    properties:
+      data:
+        $ref: '#/definitions/model.LoginResponse'
+      status:
+        $ref: '#/definitions/github_com_altsaqif_go-graphql_graph_model.Status'
+    type: object
+  model.SingleLogoutResponse:
+    properties:
+      data:
+        $ref: '#/definitions/model.LogoutResponse'
+      status:
+        $ref: '#/definitions/github_com_altsaqif_go-graphql_graph_model.Status'
+    type: object
+  model.SingleProductResponse:
+    properties:
+      data:
+        $ref: '#/definitions/model.ProductResponse'
+      status:
+        $ref: '#/definitions/github_com_altsaqif_go-graphql_graph_model.Status'
+    type: object
+  model.SingleRegisterResponse:
+    properties:
+      data:
+        $ref: '#/definitions/model.RegisterResponse'
+      status:
+        $ref: '#/definitions/github_com_altsaqif_go-graphql_graph_model.Status'
+    type: object
+  model.SingleUserResponse:
+    properties:
+      data:
+        $ref: '#/definitions/model.UserResponse'
+      status:
+        $ref: '#/definitions/github_com_altsaqif_go-graphql_graph_model.Status'
+    type: object
+  model.UserListResponse:
+    properties:
+      limit:
+        type: integer
+      offset:
+        type: integer
+      total:
+        type: integer
+      users:
+        items:
+          $ref: '#/definitions/model.UserResponse'
+        type: array
+    type: object
+  model.UserResponse:
+    properties:
+      createdAt:
+        type: string
+      deletedAt:
+        type: string
+      email:
+        type: string
+      firstname:
+        type: string
+      id:
+        type: string
+      lastname:
+        type: string
+      password:
+        type: string
+      products:
+        items:
+          $ref: '#/definitions/model.ProductResponse'
+        type: array
+      role:
+        type: string
+      updatedAt:
+        type: string
+    type: object
+host: localhost:8080
+info:
+  contact:
+    email: support@swagger.io
+    name: API Support
+    url: http://www.swagger.io/support
+  description: This is a sample server for a Go GraphQL API.
+  license:
+    name: Apache 2.0
+    url: http://www.apache.org/licenses/LICENSE-2.0.html
+  termsOfService: http://swagger.io/terms/
+  title: Go GraphQL API
+  version: "1.0"
+paths:
+  /login:
+    post:
+      consumes:
+      - application/json
+      description: Login user with email and password
+      parameters:
+      - description: Login Request
+        in: body
+        name: loginRequest
+        required: true
+        schema:
+          $ref: '#/definitions/model.LoginRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.SingleLoginResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/github_com_altsaqif_go-graphql_graph_model.Status'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/github_com_altsaqif_go-graphql_graph_model.Status'
+      summary: Login user
+      tags:
+      - Authentication
+  /logout:
+    post:
+      consumes:
+      - application/json
+      description: Clears the authentication token and logs out the current user
+      parameters:
+      - description: Logout Request
+        in: body
+        name: logoutRequest
+        required: true
+        schema:
+          $ref: '#/definitions/model.LogoutRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.SingleLogoutResponse'
+      summary: Logout the current user
+      tags:
+      - Authentication
+  /product:
+    post:
+      consumes:
+      - application/json
+      description: Creates a new product and associates it with the current user
+      parameters:
+      - description: Product Request
+        in: body
+        name: productRequest
+        required: true
+        schema:
+          $ref: '#/definitions/model.ProductRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/model.SingleProductResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/github_com_altsaqif_go-graphql_graph_model.Status'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/github_com_altsaqif_go-graphql_graph_model.Status'
+      summary: Create a new product
+      tags:
+      - Products
+  /product/{id}:
+    delete:
+      consumes:
+      - application/json
+      description: Deletes a product based on its unique ID
+      parameters:
+      - description: Product ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/github_com_altsaqif_go-graphql_graph_model.Status'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/github_com_altsaqif_go-graphql_graph_model.Status'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/github_com_altsaqif_go-graphql_graph_model.Status'
+      summary: Delete a product by ID
+      tags:
+      - Products
+    get:
+      consumes:
+      - application/json
+      description: Retrieves a product by its ID
+      parameters:
+      - description: Product ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.SingleProductResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/github_com_altsaqif_go-graphql_graph_model.Status'
+      summary: Get a product by ID
+      tags:
+      - Products
+    put:
+      consumes:
+      - application/json
+      description: Updates the fields of an existing product and associates the current
+        user with it
+      parameters:
+      - description: Product ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Product Request
+        in: body
+        name: productRequest
+        required: true
+        schema:
+          $ref: '#/definitions/model.ProductRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.SingleProductResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/github_com_altsaqif_go-graphql_graph_model.Status'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/github_com_altsaqif_go-graphql_graph_model.Status'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/github_com_altsaqif_go-graphql_graph_model.Status'
+      summary: Update an existing product
+      tags:
+      - Products
+  /products:
+    get:
+      consumes:
+      - application/json
+      description: Retrieves all products with pagination support
+      parameters:
+      - description: Limit
+        in: query
+        name: limit
+        type: integer
+      - description: Offset
+        in: query
+        name: offset
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.ProductListResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/github_com_altsaqif_go-graphql_graph_model.Status'
+      summary: Get all products
+      tags:
+      - Products
+  /products/by-stock:
+    get:
+      consumes:
+      - application/json
+      description: Retrieves products that match the specified stock quantity
+      parameters:
+      - description: Stock quantity
+        in: query
+        name: stock
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/model.AnyProductResponse'
+            type: array
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/github_com_altsaqif_go-graphql_graph_model.Status'
+      summary: Get products by stock quantity
+      tags:
+      - Products
+  /register:
+    post:
+      consumes:
+      - application/json
+      description: Register a new user with the given details
+      parameters:
+      - description: Register Request
+        in: body
+        name: registerRequest
+        required: true
+        schema:
+          $ref: '#/definitions/model.RegisterRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.SingleRegisterResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/github_com_altsaqif_go-graphql_graph_model.Status'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/github_com_altsaqif_go-graphql_graph_model.Status'
+      summary: Register a new user
+      tags:
+      - Authentication
+  /users:
+    get:
+      consumes:
+      - application/json
+      description: Retrieves a list of all users with optional pagination
+      parameters:
+      - description: Limit number of users per page
+        in: query
+        name: limit
+        type: integer
+      - description: Offset number of users for pagination
+        in: query
+        name: offset
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.UserListResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/github_com_altsaqif_go-graphql_graph_model.Status'
+      summary: Get all users
+      tags:
+      - Profiles
+  /users/{id}:
+    get:
+      consumes:
+      - application/json
+      description: Retrieves a user by their ID
+      parameters:
+      - description: User ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.SingleUserResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/github_com_altsaqif_go-graphql_graph_model.Status'
+      summary: Get user by ID
+      tags:
+      - Profiles
+schemes:
+- http
+swagger: "2.0"
