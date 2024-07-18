@@ -5,7 +5,6 @@ package common
 import (
 	"net/http"
 
-	common "github.com/altsaqif/go-graphql/cmd/shared/model"
 	"github.com/altsaqif/go-graphql/graph/model"
 	"github.com/gin-gonic/gin"
 )
@@ -132,6 +131,14 @@ func SendErrorResponse401(ctx *gin.Context, message string) {
 	})
 }
 
+// SendErrorResponse403 defines the standard error response structure
+func SendErrorResponse403(ctx *gin.Context, message string) {
+	ctx.AbortWithStatusJSON(http.StatusForbidden, &model.Status{
+		Code:    http.StatusForbidden,
+		Message: message,
+	})
+}
+
 // SendErrorResponse404 defines the standard error response structure
 func SendErrorResponse404(ctx *gin.Context, message string) {
 	ctx.AbortWithStatusJSON(http.StatusNotFound, &model.Status{
@@ -150,7 +157,7 @@ func SendErrorResponse500(ctx *gin.Context, message string) {
 
 // SendErrorResponse defines the standard error response structure
 func SendErrorResponse(ctx *gin.Context, code int, message string) {
-	ctx.AbortWithStatusJSON(code, &common.Status{
+	ctx.AbortWithStatusJSON(code, &model.Status{
 		Code:    code,
 		Message: message,
 	})

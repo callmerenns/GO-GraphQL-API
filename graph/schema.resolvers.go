@@ -36,19 +36,41 @@ import (
 // @Failure 500 {object} model.Status
 // @Router /login [post]
 func (r *mutationResolver) Login(ctx context.Context, input model.LoginRequest) (*model.LoginResponse, error) {
-	var user entity.User
 	c := ctx.Value("ginContext").(*gin.Context)
-	if err := r.DB.Where("email = ?", input.Email).First(&user).Error; err != nil {
-		common.SendErrorResponse400(c, "Invalid email or password")
+	userCh := make(chan entity.User, 1)
+	errCh := make(chan error, 1)
+
+	// Fetch user by email in a goroutine
+	go func() {
+		var user entity.User
+		if err := r.DB.Where("email = ?", input.Email).First(&user).Error; err != nil {
+			errCh <- errors.New("invalid email or password")
+			return
+		}
+		userCh <- user
+	}()
+
+	// Validate password in a goroutine
+	go func() {
+		user := <-userCh
+		if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(input.Password)); err != nil {
+			errCh <- errors.New("invalid email or password")
+			return
+		}
+		userCh <- user
+	}()
+
+	var user entity.User
+	select {
+	case user = <-userCh:
+		// User is successfully fetched and password is valid
+	case err := <-errCh:
+		// Send error response and return
+		common.SendErrorResponse400(c, err.Error())
 		return nil, nil
 	}
 
-	// Validate password (this should be hashed and compared with stored hash)
-	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(input.Password)); err != nil {
-		common.SendErrorResponse400(c, "Invalid email or password")
-		return nil, nil
-	}
-
+	// Create JWT token
 	token, err := r.JwtService.CreateToken(&user)
 	if err != nil {
 		common.SendErrorResponse500(c, fmt.Sprintf("Failed to create token: %v", err))
@@ -90,44 +112,67 @@ func (r *mutationResolver) Register(ctx context.Context, input model.RegisterReq
 		return nil, nil
 	}
 
-	// Hash the password
-	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(input.Password), bcrypt.DefaultCost)
-	if err != nil {
-		common.SendErrorResponse500(c, fmt.Sprintf("Failed to hash password: %v", err))
-		return nil, nil
-	}
+	hashedPasswordCh := make(chan string, 1)
+	errCh := make(chan error, 1)
 
-	user := entity.User{
-		FirstName: input.Firstname,
-		LastName:  input.Lastname,
-		Email:     input.Email,
-		Password:  string(hashedPassword),
-		Role:      input.Role,
+	// Hash the password in a goroutine
+	go func() {
+		hashedPassword, err := bcrypt.GenerateFromPassword([]byte(input.Password), bcrypt.DefaultCost)
+		if err != nil {
+			errCh <- fmt.Errorf("failed to hash password: %v", err)
+			return
+		}
+		hashedPasswordCh <- string(hashedPassword)
+	}()
+
+	var user entity.User
+
+	// Wait for hashed password or error
+	select {
+	case hashedPassword := <-hashedPasswordCh:
+		user = entity.User{
+			FirstName: input.Firstname,
+			LastName:  input.Lastname,
+			Email:     input.Email,
+			Password:  hashedPassword,
+			Role:      input.Role,
+		}
+	case err := <-errCh:
+		common.SendErrorResponse500(c, err.Error())
+		return nil, nil
 	}
 
 	// Debug: Log the user entity before saving
 	log.Printf("Creating user: %+v\n", user)
 
-	if err := r.DB.Create(&user).Error; err != nil {
-		common.SendErrorResponse500(c, fmt.Sprintf("Failed to create user: %v", err))
+	// Save the user in a goroutine
+	go func() {
+		if err := r.DB.Create(&user).Error; err != nil {
+			errCh <- fmt.Errorf("failed to create user: %v", err)
+			return
+		}
+		hashedPasswordCh <- ""
+	}()
+
+	select {
+	case <-hashedPasswordCh:
+		userResponse := &model.RegisterResponse{
+			ID:        strconv.FormatUint(uint64(user.ID), 10),
+			Firstname: user.FirstName,
+			Lastname:  user.LastName,
+			Email:     user.Email,
+			Role:      user.Role,
+			CreatedAt: formatTime(user.CreatedAt),
+			UpdatedAt: formatTime(user.UpdatedAt),
+			DeletedAt: formatTime(user.DeletedAt.Time),
+		}
+		// Send success response using SendCreateResponse
+		common.SendCreateRegisterResponse(c, "User created successfully", userResponse)
+		return userResponse, nil
+	case err := <-errCh:
+		common.SendErrorResponse500(c, err.Error())
 		return nil, nil
 	}
-
-	userResponse := &model.RegisterResponse{
-		ID:        strconv.FormatUint(uint64(user.ID), 10),
-		Firstname: user.FirstName,
-		Lastname:  user.LastName,
-		Email:     user.Email,
-		Role:      user.Role,
-		CreatedAt: formatTime(user.CreatedAt),
-		UpdatedAt: formatTime(user.UpdatedAt),
-		DeletedAt: formatTime(user.DeletedAt.Time),
-	}
-
-	// Send success response using SendCreateResponse
-	common.SendCreateRegisterResponse(c, "User created successfully", userResponse)
-
-	return userResponse, nil
 }
 
 // Logout is the resolver for the logout field.
@@ -143,16 +188,36 @@ func (r *mutationResolver) Logout(ctx context.Context, input model.LogoutRequest
 	// Retrieve gin context from resolver context
 	c := ctx.Value("ginContext").(*gin.Context)
 
-	// Clear token from cookie
-	c.SetCookie("token", "", -1, "/", "", false, true)
+	doneCh := make(chan struct{})
+	errCh := make(chan error, 1)
 
-	// Create logout response
-	logoutResponse := &model.LogoutResponse{Message: "Successfully logged out"}
+	// Goroutine to clear the token from the cookie
+	go func() {
+		defer close(doneCh)
 
-	// Send success response
-	common.SendSuccessLogoutResponse(c, logoutResponse)
+		// Clear token from cookie
+		c.SetCookie("token", "", -1, "/", "", false, true)
 
-	return logoutResponse, nil
+		// Check if the cookie was successfully cleared
+		_, err := c.Cookie("token")
+		if err == nil {
+			errCh <- fmt.Errorf("failed to clear the token from cookie")
+		}
+	}()
+
+	select {
+	case <-doneCh:
+		// Create logout response
+		logoutResponse := &model.LogoutResponse{Message: "Successfully logged out"}
+
+		// Send success response
+		common.SendSuccessLogoutResponse(c, logoutResponse)
+
+		return logoutResponse, nil
+	case err := <-errCh:
+		common.SendErrorResponse500(c, err.Error())
+		return nil, err
+	}
 }
 
 // CreateProduct is the resolver for the createProduct field.
@@ -167,16 +232,17 @@ func (r *mutationResolver) Logout(ctx context.Context, input model.LogoutRequest
 // @Failure 500 {object} model.Status
 // @Router /product [post]
 func (r *mutationResolver) CreateProduct(ctx context.Context, input model.ProductRequest) (*model.ProductResponse, error) {
+	// Retrieve gin context
+	c := ctx.Value("ginContext").(*gin.Context)
+
 	// Retrieve user from context
 	user, err := middleware.GetUserFromContext(ctx)
 	if err != nil {
 		// Send error response for unauthorized access
-		c := ctx.Value("ginContext").(*gin.Context)
 		common.SendErrorResponse401(c, "Unauthorized")
 		return nil, err
 	}
 
-	// Create the product entity
 	product := entity.Product{
 		Name:        input.Name,
 		Description: input.Description,
@@ -187,42 +253,52 @@ func (r *mutationResolver) CreateProduct(ctx context.Context, input model.Produc
 		Users:       []*entity.User{user}, // Add user to product relationship
 	}
 
-	// Save the product to the database
-	if err := r.DB.Create(&product).Error; err != nil {
+	doneCh := make(chan struct{})
+	errCh := make(chan error, 1)
+
+	// Goroutine to save the product to the database
+	go func() {
+		defer close(doneCh)
+		if err := r.DB.Create(&product).Error; err != nil {
+			errCh <- fmt.Errorf("failed to create product: %v", err)
+			return
+		}
+	}()
+
+	select {
+	case <-doneCh:
+		// Prepare the product response
+		productResponse := &model.ProductResponse{
+			ID:          strconv.FormatUint(uint64(product.ID), 10),
+			Name:        product.Name,
+			Description: product.Description,
+			Stock:       product.Stock,
+			Price:       product.Price,
+			CreatedAt:   formatTime(product.CreatedAt),
+			UpdatedAt:   formatTime(product.UpdatedAt),
+			DeletedAt:   formatDeletedAt(product.DeletedAt),
+			CreatedBy: &model.UserResponse{
+				ID:        strconv.FormatUint(uint64(user.ID), 10),
+				Firstname: user.FirstName,
+				Lastname:  user.LastName,
+				Email:     user.Email,
+				Password:  user.Password,
+				Role:      user.Role,
+				CreatedAt: formatTime(user.CreatedAt),
+				UpdatedAt: formatTime(user.UpdatedAt),
+				DeletedAt: formatDeletedAt(user.DeletedAt),
+			},
+		}
+
+		// Send create response
+		common.SendCreateProductResponse(c, "Product created successfully", productResponse)
+
+		return productResponse, nil
+	case err := <-errCh:
 		// Send error response for internal server error
-		c := ctx.Value("ginContext").(*gin.Context)
-		common.SendErrorResponse500(c, "Failed to create product")
+		common.SendErrorResponse500(c, err.Error())
 		return nil, err
 	}
-
-	// Prepare the product response
-	productResponse := &model.ProductResponse{
-		ID:          strconv.FormatUint(uint64(product.ID), 10),
-		Name:        product.Name,
-		Description: product.Description,
-		Stock:       product.Stock,
-		Price:       product.Price,
-		CreatedAt:   formatTime(product.CreatedAt),
-		UpdatedAt:   formatTime(product.UpdatedAt),
-		DeletedAt:   formatDeletedAt(product.DeletedAt),
-		CreatedBy: &model.UserResponse{
-			ID:        strconv.FormatUint(uint64(user.ID), 10),
-			Firstname: user.FirstName,
-			Lastname:  user.LastName,
-			Email:     user.Email,
-			Password:  user.Password,
-			Role:      user.Role,
-			CreatedAt: formatTime(user.CreatedAt),
-			UpdatedAt: formatTime(user.UpdatedAt),
-			DeletedAt: formatDeletedAt(user.DeletedAt),
-		},
-	}
-
-	// Send create response
-	c := ctx.Value("ginContext").(*gin.Context)
-	common.SendCreateProductResponse(c, "Product created successfully", productResponse)
-
-	return productResponse, nil
 }
 
 // UpdateProduct is the resolver for the updateProduct field.
@@ -240,89 +316,114 @@ func (r *mutationResolver) CreateProduct(ctx context.Context, input model.Produc
 // @Failure 500 {object} model.Status
 // @Router /product/{id} [put]
 func (r *mutationResolver) UpdateProduct(ctx context.Context, id string, input model.ProductRequest) (*model.ProductResponse, error) {
+	// Retrieve gin context
+	c := ctx.Value("ginContext").(*gin.Context)
+
+	// Channel untuk sinyal selesai dan error
+	doneCh := make(chan struct{})
+	errCh := make(chan error, 1)
+
 	var product entity.Product
-	if err := r.DB.Where("id = ?", id).First(&product).Error; err != nil {
+	go func() {
+		defer close(doneCh)
+		// Retrieve product by ID
+		if err := r.DB.Where("id = ?", id).First(&product).Error; err != nil {
+			errCh <- fmt.Errorf("product not found")
+			return
+		}
+	}()
+
+	select {
+	case <-doneCh:
+		// Retrieve user from context
+		user, err := middleware.GetUserFromContext(ctx)
+		if err != nil {
+			common.SendErrorResponse401(c, "Unauthorized")
+			return nil, fmt.Errorf("failed to get user from context: %v", err)
+		}
+
+		// Update product fields
+		product.Name = input.Name
+		product.Description = input.Description
+		product.Stock = input.Stock
+		product.Price = input.Price
+		product.UpdatedAt = time.Now()
+
+		doneUpdateCh := make(chan struct{})
+		errUpdateCh := make(chan error, 1)
+
+		// Goroutine untuk menyimpan produk yang diperbarui ke database
+		go func() {
+			defer close(doneUpdateCh)
+			if err := r.DB.Save(&product).Error; err != nil {
+				errUpdateCh <- fmt.Errorf("failed to update product: %v", err)
+				return
+			}
+		}()
+
+		select {
+		case <-doneUpdateCh:
+			// Goroutine untuk menambahkan user ke produk jika belum ditambahkan
+			go func() {
+				if err := r.DB.Model(&product).Association("Users").Append(user); err != nil {
+					errCh <- fmt.Errorf("failed to add user to product: %v", err)
+					return
+				}
+			}()
+
+			// Prepare the product response
+			productResponse := &model.ProductResponse{
+				ID:          strconv.FormatUint(uint64(product.ID), 10),
+				Name:        product.Name,
+				Description: product.Description,
+				Stock:       product.Stock,
+				Price:       product.Price,
+				CreatedAt:   formatTime(product.CreatedAt),
+				UpdatedAt:   formatTime(product.UpdatedAt),
+				DeletedAt:   formatDeletedAt(product.DeletedAt),
+				CreatedBy: &model.UserResponse{
+					ID:        strconv.FormatUint(uint64(user.ID), 10),
+					Firstname: user.FirstName,
+					Lastname:  user.LastName,
+					Email:     user.Email,
+					Password:  user.Password,
+					Role:      user.Role,
+					CreatedAt: formatTime(user.CreatedAt),
+					UpdatedAt: formatTime(user.UpdatedAt),
+					DeletedAt: formatDeletedAt(user.DeletedAt),
+				},
+				Users: []*model.UserResponse{},
+			}
+
+			// Populate the users field in the product response
+			for _, u := range product.Users {
+				productResponse.Users = append(productResponse.Users, &model.UserResponse{
+					ID:        strconv.FormatUint(uint64(u.ID), 10),
+					Firstname: u.FirstName,
+					Lastname:  u.LastName,
+					Email:     u.Email,
+					Password:  u.Password,
+					Role:      u.Role,
+					CreatedAt: formatTime(u.CreatedAt),
+					UpdatedAt: formatTime(u.UpdatedAt),
+					DeletedAt: formatDeletedAt(u.DeletedAt),
+				})
+			}
+
+			// Send success response
+			common.SendSuccessProductResponse(c, productResponse)
+
+			return productResponse, nil
+		case err := <-errUpdateCh:
+			// Send error response for internal server error
+			common.SendErrorResponse500(c, err.Error())
+			return nil, err
+		}
+	case err := <-errCh:
 		// Send error response for product not found
-		c := ctx.Value("ginContext").(*gin.Context)
 		common.SendErrorResponse404(c, "Product not found")
-		return nil, fmt.Errorf("product not found")
-	}
-
-	// Retrieve user from context
-	user, err := middleware.GetUserFromContext(ctx)
-	if err != nil {
-		// Send error response for unauthorized access
-		c := ctx.Value("ginContext").(*gin.Context)
-		common.SendErrorResponse401(c, "Unauthorized")
-		return nil, fmt.Errorf("failed to get user from context: %v", err)
-	}
-
-	// Update product fields
-	product.Name = input.Name
-	product.Description = input.Description
-	product.Stock = input.Stock
-	product.Price = input.Price
-	product.UpdatedAt = time.Now()
-
-	if err := r.DB.Save(&product).Error; err != nil {
-		// Send error response for internal server error
-		c := ctx.Value("ginContext").(*gin.Context)
-		common.SendErrorResponse500(c, "Failed to update product")
 		return nil, err
 	}
-
-	// Add user to product's users if not already added
-	if err := r.DB.Model(&product).Association("Users").Append(user); err != nil {
-		// Send error response for internal server error
-		c := ctx.Value("ginContext").(*gin.Context)
-		common.SendErrorResponse500(c, "Failed to add user to product")
-		return nil, fmt.Errorf("failed to add user to product: %v", err)
-	}
-
-	// Prepare the product response
-	productResponse := &model.ProductResponse{
-		ID:          strconv.FormatUint(uint64(product.ID), 10),
-		Name:        product.Name,
-		Description: product.Description,
-		Stock:       product.Stock,
-		Price:       product.Price,
-		CreatedAt:   formatTime(product.CreatedAt),
-		UpdatedAt:   formatTime(product.UpdatedAt),
-		DeletedAt:   formatDeletedAt(product.DeletedAt),
-		CreatedBy: &model.UserResponse{
-			ID:        strconv.FormatUint(uint64(user.ID), 10),
-			Firstname: user.FirstName,
-			Lastname:  user.LastName,
-			Email:     user.Email,
-			Password:  user.Password,
-			Role:      user.Role,
-			CreatedAt: formatTime(user.CreatedAt),
-			UpdatedAt: formatTime(user.UpdatedAt),
-			DeletedAt: formatDeletedAt(user.DeletedAt),
-		},
-		Users: []*model.UserResponse{},
-	}
-
-	// Populate the users field in the product response
-	for _, u := range product.Users {
-		productResponse.Users = append(productResponse.Users, &model.UserResponse{
-			ID:        strconv.FormatUint(uint64(u.ID), 10),
-			Firstname: u.FirstName,
-			Lastname:  u.LastName,
-			Email:     u.Email,
-			Password:  u.Password,
-			Role:      u.Role,
-			CreatedAt: formatTime(u.CreatedAt),
-			UpdatedAt: formatTime(u.UpdatedAt),
-			DeletedAt: formatDeletedAt(u.DeletedAt),
-		})
-	}
-
-	// Send success response
-	c := ctx.Value("ginContext").(*gin.Context)
-	common.SendSuccessProductResponse(c, productResponse)
-
-	return productResponse, nil
 }
 
 // DeleteProduct is the resolver for the deleteProduct field.
@@ -338,34 +439,48 @@ func (r *mutationResolver) UpdateProduct(ctx context.Context, id string, input m
 // @Failure 500 {object} model.Status
 // @Router /product/{id} [delete]
 func (r *mutationResolver) DeleteProduct(ctx context.Context, id string) (*model.Status, error) {
-	// Check if the product exists
-	var product entity.Product
-	if err := r.DB.Where("id = ?", id).First(&product).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			// Send error response for product not found
-			c := ctx.Value("ginContext").(*gin.Context)
-			common.SendErrorResponse404(c, "Product not found")
-			return nil, fmt.Errorf("product not found")
-		}
-		// Send error response for internal server error
-		c := ctx.Value("ginContext").(*gin.Context)
-		common.SendErrorResponse500(c, "Failed to retrieve product")
-		return nil, fmt.Errorf("failed to retrieve product: %v", err)
-	}
-
-	// Delete the product
-	if err := r.DB.Delete(&product).Error; err != nil {
-		// Send error response for internal server error
-		c := ctx.Value("ginContext").(*gin.Context)
-		common.SendErrorResponse500(c, "Failed to delete product")
-		return nil, fmt.Errorf("failed to delete product: %v", err)
-	}
-
-	// Send success response
 	c := ctx.Value("ginContext").(*gin.Context)
-	common.SendSuccessDeleteProductResponse(c, &model.Status{Code: http.StatusOK, Message: "Product deleted successfully"})
 
-	return &model.Status{Code: http.StatusOK, Message: "Product deleted successfully"}, nil
+	// Channel untuk sinyal selesai dan error
+	doneCh := make(chan struct{})
+	errCh := make(chan error, 1)
+
+	// Goroutine untuk mengecek keberadaan produk dan menghapusnya
+	go func() {
+		defer close(doneCh)
+
+		var product entity.Product
+		// Check if the product exists
+		if err := r.DB.Where("id = ?", id).First(&product).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				errCh <- fmt.Errorf("product not found")
+				return
+			}
+			errCh <- fmt.Errorf("failed to retrieve product: %v", err)
+			return
+		}
+
+		// Delete the product
+		if err := r.DB.Delete(&product).Error; err != nil {
+			errCh <- fmt.Errorf("failed to delete product: %v", err)
+			return
+		}
+	}()
+
+	select {
+	case <-doneCh:
+		// Send success response
+		common.SendSuccessDeleteProductResponse(c, &model.Status{Code: http.StatusOK, Message: "Product deleted successfully"})
+		return &model.Status{Code: http.StatusOK, Message: "Product deleted successfully"}, nil
+	case err := <-errCh:
+		// Handle errors and send appropriate responses
+		if err.Error() == "product not found" {
+			common.SendErrorResponse404(c, "Product not found")
+			return nil, err
+		}
+		common.SendErrorResponse500(c, err.Error())
+		return nil, err
+	}
 }
 
 // GetAllUsers is the resolver for the getAllUsers field.
@@ -381,13 +496,53 @@ func (r *mutationResolver) DeleteProduct(ctx context.Context, id string) (*model
 // @Failure 500 {object} model.Status
 // @Router /users [get]
 func (r *queryResolver) GetAllUsers(ctx context.Context, limit int, offset int) (*model.UserListResponse, error) {
-	var users []entity.User
 	c := ctx.Value("ginContext").(*gin.Context)
-	if err := r.DB.Preload("Products").Offset(offset).Limit(limit).Find(&users).Error; err != nil {
-		common.SendErrorResponse500(c, "Failed to fetch product")
-		return nil, fmt.Errorf("failed to fetch product: %v", err)
+
+	// Channels for signaling completion and errors
+	usersCh := make(chan []entity.User, 1)
+	totalCh := make(chan int64, 1)
+	errCh := make(chan error, 2)
+
+	// Goroutine for fetching users
+	go func() {
+		defer close(usersCh)
+		defer close(errCh)
+		var users []entity.User
+		if err := r.DB.Preload("Products").Offset(offset).Limit(limit).Find(&users).Error; err != nil {
+			errCh <- fmt.Errorf("failed to fetch users: %v", err)
+			return
+		}
+		usersCh <- users
+	}()
+
+	// Goroutine for fetching total user count
+	go func() {
+		defer close(totalCh)
+		var total int64
+		if err := r.DB.Model(&entity.User{}).Count(&total).Error; err != nil {
+			errCh <- fmt.Errorf("failed to fetch total user count: %v", err)
+			return
+		}
+		totalCh <- total
+	}()
+
+	// Wait for results or errors
+	var users []entity.User
+	var total int64
+
+	for i := 0; i < 2; i++ {
+		select {
+		case fetchedUsers := <-usersCh:
+			users = fetchedUsers
+		case fetchedTotal := <-totalCh:
+			total = fetchedTotal
+		case err := <-errCh:
+			common.SendErrorResponse500(c, err.Error())
+			return nil, err
+		}
 	}
 
+	// Prepare the user responses
 	var userResponses []*model.UserResponse
 	for _, u := range users {
 		var products []*model.ProductResponse
@@ -418,12 +573,7 @@ func (r *queryResolver) GetAllUsers(ctx context.Context, limit int, offset int) 
 		})
 	}
 
-	var total int64
-	if err := r.DB.Model(&entity.User{}).Count(&total).Error; err != nil {
-		common.SendErrorResponse500(c, "Failed to fetch data user")
-		return nil, fmt.Errorf("failed to fetch data user: %v", err)
-	}
-
+	// Prepare the payload
 	payload := &model.UserListResponse{
 		Total:  int(total),
 		Limit:  limit,
@@ -447,11 +597,33 @@ func (r *queryResolver) GetAllUsers(ctx context.Context, limit int, offset int) 
 // @Failure 404 {object} model.Status
 // @Router /users/{id} [get]
 func (r *queryResolver) GetUserByID(ctx context.Context, id string) (*model.UserResponse, error) {
-	var user entity.User
 	c := ctx.Value("ginContext").(*gin.Context)
-	if err := r.DB.Preload("Products").Where("id = ?", id).First(&user).Error; err != nil {
-		common.SendErrorResponse404(c, "User not found")
-		return nil, fmt.Errorf("user not found: %v", err)
+
+	// Channel for signaling completion and errors
+	userCh := make(chan *entity.User, 1)
+	errCh := make(chan error, 1)
+
+	// Goroutine for fetching user
+	go func() {
+		defer close(userCh)
+		defer close(errCh)
+		var user entity.User
+		if err := r.DB.Preload("Products").Where("id = ?", id).First(&user).Error; err != nil {
+			errCh <- fmt.Errorf("user not found: %v", err)
+			return
+		}
+		userCh <- &user
+	}()
+
+	// Wait for results or errors
+	var user *entity.User
+
+	select {
+	case fetchedUser := <-userCh:
+		user = fetchedUser
+	case err := <-errCh:
+		common.SendErrorResponse404(c, err.Error())
+		return nil, err
 	}
 
 	// Construct user response
@@ -500,11 +672,55 @@ func (r *queryResolver) GetUserByID(ctx context.Context, id string) (*model.User
 // @Failure 500 {object} model.Status
 // @Router /products [get]
 func (r *queryResolver) GetAllProducts(ctx context.Context, limit int, offset int) (*model.ProductListResponse, error) {
-	var products []entity.Product
 	c := ctx.Value("ginContext").(*gin.Context)
-	if err := r.DB.Preload("Users").Limit(limit).Offset(offset).Find(&products).Error; err != nil {
-		common.SendErrorResponse500(c, "Failed to fetch product")
-		return nil, fmt.Errorf("failed to fetch product: %v", err)
+
+	// Channels for signaling completion and errors
+	productsCh := make(chan []entity.Product, 1)
+	errCh := make(chan error, 1)
+	totalProductsCh := make(chan int64, 1)
+
+	// Goroutine for fetching products
+	go func() {
+		defer close(productsCh)
+		defer close(errCh)
+		defer close(totalProductsCh)
+
+		var products []entity.Product
+		if err := r.DB.Preload("Users").Limit(limit).Offset(offset).Find(&products).Error; err != nil {
+			errCh <- fmt.Errorf("failed to fetch products: %v", err)
+			return
+		}
+		productsCh <- products
+	}()
+
+	// Goroutine for counting total products
+	go func() {
+		var totalProducts int64
+		if err := r.DB.Model(&entity.Product{}).Count(&totalProducts).Error; err != nil {
+			errCh <- fmt.Errorf("failed to count products: %v", err)
+			return
+		}
+		totalProductsCh <- totalProducts
+	}()
+
+	// Wait for results or errors
+	var products []entity.Product
+	var totalProducts int64
+
+	select {
+	case fetchedProducts := <-productsCh:
+		products = fetchedProducts
+	case err := <-errCh:
+		common.SendErrorResponse500(c, err.Error())
+		return nil, err
+	}
+
+	select {
+	case count := <-totalProductsCh:
+		totalProducts = count
+	case err := <-errCh:
+		common.SendErrorResponse500(c, err.Error())
+		return nil, err
 	}
 
 	var productResponses []*model.ProductResponse
@@ -539,9 +755,6 @@ func (r *queryResolver) GetAllProducts(ctx context.Context, limit int, offset in
 		productResponses = append(productResponses, productResponse)
 	}
 
-	totalProducts := int64(0)
-	r.DB.Model(&entity.Product{}).Count(&totalProducts)
-
 	payload := &model.ProductListResponse{
 		Total:    int(totalProducts),
 		Limit:    limit,
@@ -565,26 +778,49 @@ func (r *queryResolver) GetAllProducts(ctx context.Context, limit int, offset in
 // @Failure 404 {object} model.Status
 // @Router /product/{id} [get]
 func (r *queryResolver) GetProductByID(ctx context.Context, id string) (*model.ProductResponse, error) {
-	var product entity.Product
 	c := ctx.Value("ginContext").(*gin.Context)
-	if err := r.DB.Preload("Users").Where("id = ?", id).First(&product).Error; err != nil {
+
+	// Channels for signaling completion and errors
+	productCh := make(chan entity.Product, 1)
+	errCh := make(chan error, 1)
+
+	// Goroutine for fetching product by ID
+	go func() {
+		defer close(productCh)
+		defer close(errCh)
+
+		var product entity.Product
+		if err := r.DB.Preload("Users").Where("id = ?", id).First(&product).Error; err != nil {
+			errCh <- fmt.Errorf("failed to fetch product: %v", err)
+			return
+		}
+		productCh <- product
+	}()
+
+	// Wait for result or error
+	var fetchedProduct entity.Product
+
+	select {
+	case fetchedProduct = <-productCh:
+	case err := <-errCh:
 		common.SendErrorResponse404(c, "Product not found")
 		return nil, fmt.Errorf("product not found: %v", err)
 	}
 
+	// Prepare product response
 	productResponse := &model.ProductResponse{
-		ID:          strconv.FormatUint(uint64(product.ID), 10),
-		Name:        product.Name,
-		Description: product.Description,
-		Stock:       product.Stock,
-		Price:       product.Price,
-		CreatedAt:   formatTime(product.CreatedAt),
-		UpdatedAt:   formatTime(product.UpdatedAt),
-		DeletedAt:   formatDeletedAt(product.DeletedAt),
+		ID:          strconv.FormatUint(uint64(fetchedProduct.ID), 10),
+		Name:        fetchedProduct.Name,
+		Description: fetchedProduct.Description,
+		Stock:       fetchedProduct.Stock,
+		Price:       fetchedProduct.Price,
+		CreatedAt:   formatTime(fetchedProduct.CreatedAt),
+		UpdatedAt:   formatTime(fetchedProduct.UpdatedAt),
+		DeletedAt:   formatDeletedAt(fetchedProduct.DeletedAt),
 		Users:       []*model.UserResponse{},
 	}
 
-	for _, u := range product.Users {
+	for _, u := range fetchedProduct.Users {
 		userResponse := &model.UserResponse{
 			ID:        strconv.FormatUint(uint64(u.ID), 10),
 			Firstname: u.FirstName,
@@ -599,7 +835,7 @@ func (r *queryResolver) GetProductByID(ctx context.Context, id string) (*model.P
 		productResponse.Users = append(productResponse.Users, userResponse)
 	}
 
-	// Send success response using SendSuccessResponse
+	// Send success response
 	common.SendSuccessProductResponse(c, productResponse)
 
 	return productResponse, nil
@@ -616,15 +852,40 @@ func (r *queryResolver) GetProductByID(ctx context.Context, id string) (*model.P
 // @Failure 404 {object} model.Status
 // @Router /products/by-stock [get]
 func (r *queryResolver) GetProductByStock(ctx context.Context, stock model.Stock) ([]*model.ProductResponse, error) {
-	var products []entity.Product
 	c := ctx.Value("ginContext").(*gin.Context)
-	if err := r.DB.Preload("Users").Where("stock = ?", stock.Stock).Find(&products).Error; err != nil {
+
+	// Channels for signaling completion and errors
+	productsCh := make(chan []entity.Product, 1)
+	errCh := make(chan error, 1)
+
+	// Goroutine for fetching products by stock
+	go func() {
+		defer close(productsCh)
+		defer close(errCh)
+
+		var products []entity.Product
+		if err := r.DB.Preload("Users").Where("stock = ?", stock.Stock).Find(&products).Error; err != nil {
+			errCh <- fmt.Errorf("failed to fetch products by stock: %v", err)
+			return
+		}
+		productsCh <- products
+	}()
+
+	// Wait for results or errors
+	var fetchedProducts []entity.Product
+
+	select {
+	case p := <-productsCh:
+		fetchedProducts = p
+	case err := <-errCh:
 		common.SendErrorResponse404(c, "Stock not found")
-		return nil, fmt.Errorf("stock not found: %v", err)
+		return nil, err
 	}
 
+	// Prepare product responses
 	var productResponses []*model.ProductResponse
-	for _, product := range products {
+
+	for _, product := range fetchedProducts {
 		productResponse := &model.ProductResponse{
 			ID:          strconv.FormatUint(uint64(product.ID), 10),
 			Name:        product.Name,
@@ -655,7 +916,7 @@ func (r *queryResolver) GetProductByStock(ctx context.Context, stock model.Stock
 		productResponses = append(productResponses, productResponse)
 	}
 
-	// Send success response using SendSuccessResponse
+	// Send success response using SendSuccessProductByStockResponse
 	common.SendSuccessProductByStockResponse(c, productResponses)
 
 	return productResponses, nil

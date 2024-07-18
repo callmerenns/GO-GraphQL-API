@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"strings"
@@ -41,22 +42,26 @@ func (m *AuthMiddleware) AuthDirective(ctx context.Context, obj interface{}, nex
 	token := headers.Get("Authorization")
 	if token == "" {
 		common.SendErrorResponse(c, http.StatusUnauthorized, "No token provided")
+		return nil, fmt.Errorf("no token provided")
 	}
 
 	token = strings.TrimPrefix(token, "Bearer ")
 	claims, err := m.jwtService.ValidateToken(token)
 	if err != nil {
 		common.SendErrorResponse(c, http.StatusUnauthorized, "Permission denied!")
+		return nil, fmt.Errorf("permission denied")
 	}
 
 	if !contains(roles, claims.Role) {
 		common.SendErrorResponse(c, http.StatusForbidden, "Only user & admin role is authorized to access this resource")
+		return nil, fmt.Errorf("only user & admin role is authorized to access this resource")
 	}
 
 	userID := claims.ID
 	var user entity.User
 	if err := m.db.Where("id = ?", userID).First(&user).Error; err != nil {
 		common.SendErrorResponse(c, http.StatusNotFound, "User not found")
+		return nil, fmt.Errorf("user not found")
 	}
 
 	log.Printf("User fetched: %+v\n", user)
@@ -90,6 +95,7 @@ func GetUserFromContext(ctx context.Context) (*entity.User, error) {
 	user, ok := ctx.Value("user").(*entity.User)
 	if !ok || user == nil {
 		common.SendErrorResponse(c, http.StatusNotFound, "User not found in context")
+		return nil, fmt.Errorf("user not found in context")
 	}
 	return user, nil
 }

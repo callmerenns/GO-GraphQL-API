@@ -96,7 +96,8 @@ func main() {
 			Auth: func(ctx context.Context, obj interface{}, next graphql.Resolver) (res interface{}, err error) {
 				return authMiddleware.AuthDirective(ctx, obj, next, []string{
 					"admin",
-					"user",
+					"customer",
+					"reseller",
 				})
 			},
 		},
