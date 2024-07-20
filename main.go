@@ -14,6 +14,7 @@ import (
 	"github.com/altsaqif/go-graphql/cmd/delivery/middleware"
 	"github.com/altsaqif/go-graphql/cmd/entity"
 	"github.com/altsaqif/go-graphql/cmd/shared/service"
+	"github.com/altsaqif/go-graphql/cmd/utils"
 	_ "github.com/altsaqif/go-graphql/docs"
 	"github.com/altsaqif/go-graphql/graph"
 	"github.com/altsaqif/go-graphql/graph/generated"
@@ -57,6 +58,9 @@ func main() {
 	r := gin.Default()
 	r.Use(middleware.HandleGraphQLErrors(), middleware.CORSMiddleware())
 
+	// Create blacklist
+	blacklist := utils.NewBlacklist()
+
 	// Database connection
 	dsn := fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?charset=utf8mb4&parseTime=True&loc=Local",
 		cfg.DbConfig.User, cfg.DbConfig.Password, cfg.DbConfig.Host, cfg.DbConfig.Port, cfg.DbConfig.Name)
@@ -85,12 +89,13 @@ func main() {
 	jwtService := service.NewJwtService(tokenConfig)
 
 	// Middleware
-	authMiddleware := middleware.NewAuthMiddleware(jwtService, db)
+	authMiddleware := middleware.NewAuthMiddleware(jwtService, db, *blacklist)
 
 	srv := handler.NewDefaultServer(generated.NewExecutableSchema(generated.Config{
 		Resolvers: &graph.Resolver{
 			DB:         db,
 			JwtService: jwtService,
+			Blacklist:  blacklist,
 		},
 		Directives: generated.DirectiveRoot{
 			Auth: func(ctx context.Context, obj interface{}, next graphql.Resolver) (res interface{}, err error) {

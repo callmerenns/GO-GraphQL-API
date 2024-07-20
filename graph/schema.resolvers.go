@@ -11,6 +11,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/altsaqif/go-graphql/cmd/delivery/middleware"
@@ -185,39 +186,32 @@ func (r *mutationResolver) Register(ctx context.Context, input model.RegisterReq
 // @Success 200 {object} model.SingleLogoutResponse
 // @Router /logout [post]
 func (r *mutationResolver) Logout(ctx context.Context, input model.LogoutRequest) (*model.LogoutResponse, error) {
-	// Retrieve gin context from resolver context
 	c := ctx.Value("ginContext").(*gin.Context)
 
-	doneCh := make(chan struct{})
-	errCh := make(chan error, 1)
+	authHeader := c.GetHeader("Authorization")
+	if authHeader == "" {
+		common.SendErrorResponse500(c, "No Authorization header found")
+		return nil, fmt.Errorf("no Authorization header found")
+	}
 
-	// Goroutine to clear the token from the cookie
-	go func() {
-		defer close(doneCh)
+	parts := strings.Split(authHeader, " ")
+	if len(parts) != 2 || strings.ToLower(parts[0]) != "bearer" {
+		common.SendErrorResponse500(c, "Invalid Authorization header format")
+		return nil, fmt.Errorf("invalid Authorization header format")
+	}
+	token := parts[1]
 
-		// Clear token from cookie
-		c.SetCookie("token", "", -1, "/", "", false, true)
-
-		// Check if the cookie was successfully cleared
-		_, err := c.Cookie("token")
-		if err == nil {
-			errCh <- fmt.Errorf("failed to clear the token from cookie")
-		}
-	}()
-
-	select {
-	case <-doneCh:
-		// Create logout response
-		logoutResponse := &model.LogoutResponse{Message: "Successfully logged out"}
-
-		// Send success response
-		common.SendSuccessLogoutResponse(c, logoutResponse)
-
-		return logoutResponse, nil
-	case err := <-errCh:
-		common.SendErrorResponse500(c, err.Error())
+	// Add the token to the blacklist synchronously
+	err := r.Blacklist.Add(token)
+	if err != nil {
+		common.SendErrorResponse500(c, fmt.Sprintf("Failed to add token to blacklist: %v", err))
 		return nil, err
 	}
+	log.Printf("Token %s has been added to blacklist", token)
+
+	logoutResponse := &model.LogoutResponse{Message: "Successfully logged out"}
+	common.SendSuccessLogoutResponse(c, logoutResponse)
+	return logoutResponse, nil
 }
 
 // CreateProduct is the resolver for the createProduct field.
@@ -277,17 +271,6 @@ func (r *mutationResolver) CreateProduct(ctx context.Context, input model.Produc
 			CreatedAt:   formatTime(product.CreatedAt),
 			UpdatedAt:   formatTime(product.UpdatedAt),
 			DeletedAt:   formatDeletedAt(product.DeletedAt),
-			CreatedBy: &model.UserResponse{
-				ID:        strconv.FormatUint(uint64(user.ID), 10),
-				Firstname: user.FirstName,
-				Lastname:  user.LastName,
-				Email:     user.Email,
-				Password:  user.Password,
-				Role:      user.Role,
-				CreatedAt: formatTime(user.CreatedAt),
-				UpdatedAt: formatTime(user.UpdatedAt),
-				DeletedAt: formatDeletedAt(user.DeletedAt),
-			},
 		}
 
 		// Send create response
@@ -381,18 +364,7 @@ func (r *mutationResolver) UpdateProduct(ctx context.Context, id string, input m
 				CreatedAt:   formatTime(product.CreatedAt),
 				UpdatedAt:   formatTime(product.UpdatedAt),
 				DeletedAt:   formatDeletedAt(product.DeletedAt),
-				CreatedBy: &model.UserResponse{
-					ID:        strconv.FormatUint(uint64(user.ID), 10),
-					Firstname: user.FirstName,
-					Lastname:  user.LastName,
-					Email:     user.Email,
-					Password:  user.Password,
-					Role:      user.Role,
-					CreatedAt: formatTime(user.CreatedAt),
-					UpdatedAt: formatTime(user.UpdatedAt),
-					DeletedAt: formatDeletedAt(user.DeletedAt),
-				},
-				Users: []*model.UserResponse{},
+				Users:       []*model.UserResponse{},
 			}
 
 			// Populate the users field in the product response
@@ -499,50 +471,52 @@ func (r *queryResolver) GetAllUsers(ctx context.Context, limit int, offset int) 
 	c := ctx.Value("ginContext").(*gin.Context)
 
 	// Channels for signaling completion and errors
-	usersCh := make(chan []entity.User, 1)
-	totalCh := make(chan int64, 1)
-	errCh := make(chan error, 2)
+	usersCh := make(chan []entity.User)
+	totalUsersCh := make(chan int64)
+	errCh := make(chan error, 1)
 
 	// Goroutine for fetching users
 	go func() {
-		defer close(usersCh)
-		defer close(errCh)
 		var users []entity.User
-		if err := r.DB.Preload("Products").Offset(offset).Limit(limit).Find(&users).Error; err != nil {
+		if err := r.DB.Preload("Products").Limit(limit).Offset(offset).Find(&users).Error; err != nil {
 			errCh <- fmt.Errorf("failed to fetch users: %v", err)
 			return
 		}
 		usersCh <- users
 	}()
 
-	// Goroutine for fetching total user count
+	// Goroutine for counting total users
 	go func() {
-		defer close(totalCh)
-		var total int64
-		if err := r.DB.Model(&entity.User{}).Count(&total).Error; err != nil {
-			errCh <- fmt.Errorf("failed to fetch total user count: %v", err)
+		var totalUsers int64
+		if err := r.DB.Model(&entity.User{}).Count(&totalUsers).Error; err != nil {
+			errCh <- fmt.Errorf("failed to count users: %v", err)
 			return
 		}
-		totalCh <- total
+		totalUsersCh <- totalUsers
 	}()
 
-	// Wait for results or errors
 	var users []entity.User
-	var total int64
+	var totalUsers int64
 
+	// Wait for results or errors
 	for i := 0; i < 2; i++ {
 		select {
 		case fetchedUsers := <-usersCh:
 			users = fetchedUsers
-		case fetchedTotal := <-totalCh:
-			total = fetchedTotal
+		case count := <-totalUsersCh:
+			totalUsers = count
 		case err := <-errCh:
 			common.SendErrorResponse500(c, err.Error())
 			return nil, err
 		}
 	}
 
-	// Prepare the user responses
+	// If no users found, return 404
+	if len(users) == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
+		return nil, nil
+	}
+
 	var userResponses []*model.UserResponse
 	for _, u := range users {
 		var products []*model.ProductResponse
@@ -573,15 +547,14 @@ func (r *queryResolver) GetAllUsers(ctx context.Context, limit int, offset int) 
 		})
 	}
 
-	// Prepare the payload
 	payload := &model.UserListResponse{
-		Total:  int(total),
+		Total:  int(totalUsers),
 		Limit:  limit,
 		Offset: offset,
 		Users:  userResponses,
 	}
 
-	common.SendPagedUserResponse(c, int(total), limit, offset, userResponses)
+	common.SendPagedUserResponse(c, int(totalUsers), limit, offset, userResponses)
 
 	return payload, nil
 }
@@ -675,16 +648,12 @@ func (r *queryResolver) GetAllProducts(ctx context.Context, limit int, offset in
 	c := ctx.Value("ginContext").(*gin.Context)
 
 	// Channels for signaling completion and errors
-	productsCh := make(chan []entity.Product, 1)
+	productsCh := make(chan []entity.Product)
+	totalProductsCh := make(chan int64)
 	errCh := make(chan error, 1)
-	totalProductsCh := make(chan int64, 1)
 
 	// Goroutine for fetching products
 	go func() {
-		defer close(productsCh)
-		defer close(errCh)
-		defer close(totalProductsCh)
-
 		var products []entity.Product
 		if err := r.DB.Preload("Users").Limit(limit).Offset(offset).Find(&products).Error; err != nil {
 			errCh <- fmt.Errorf("failed to fetch products: %v", err)
@@ -703,24 +672,26 @@ func (r *queryResolver) GetAllProducts(ctx context.Context, limit int, offset in
 		totalProductsCh <- totalProducts
 	}()
 
-	// Wait for results or errors
 	var products []entity.Product
 	var totalProducts int64
 
-	select {
-	case fetchedProducts := <-productsCh:
-		products = fetchedProducts
-	case err := <-errCh:
-		common.SendErrorResponse500(c, err.Error())
-		return nil, err
+	// Wait for results or errors
+	for i := 0; i < 2; i++ {
+		select {
+		case fetchedProducts := <-productsCh:
+			products = fetchedProducts
+		case count := <-totalProductsCh:
+			totalProducts = count
+		case err := <-errCh:
+			common.SendErrorResponse500(c, err.Error())
+			return nil, err
+		}
 	}
 
-	select {
-	case count := <-totalProductsCh:
-		totalProducts = count
-	case err := <-errCh:
-		common.SendErrorResponse500(c, err.Error())
-		return nil, err
+	// If no products found, return 404
+	if len(products) == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Product not found"})
+		return nil, nil
 	}
 
 	var productResponses []*model.ProductResponse
@@ -878,8 +849,14 @@ func (r *queryResolver) GetProductByStock(ctx context.Context, stock model.Stock
 	case p := <-productsCh:
 		fetchedProducts = p
 	case err := <-errCh:
-		common.SendErrorResponse404(c, "Stock not found")
+		common.SendErrorResponse500(c, err.Error())
 		return nil, err
+	}
+
+	// If no products found, return 404
+	if len(fetchedProducts) == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Product not found"})
+		return nil, nil
 	}
 
 	// Prepare product responses

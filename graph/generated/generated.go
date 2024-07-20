@@ -1387,8 +1387,6 @@ func (ec *executionContext) fieldContext_AnyProductResponse_data(ctx context.Con
 				return ec.fieldContext_ProductResponse_updatedAt(ctx, field)
 			case "deletedAt":
 				return ec.fieldContext_ProductResponse_deletedAt(ctx, field)
-			case "createdBy":
-				return ec.fieldContext_ProductResponse_createdBy(ctx, field)
 			case "users":
 				return ec.fieldContext_ProductResponse_users(ctx, field)
 			}
@@ -1720,8 +1718,6 @@ func (ec *executionContext) fieldContext_Enrollment_product(ctx context.Context,
 				return ec.fieldContext_ProductResponse_updatedAt(ctx, field)
 			case "deletedAt":
 				return ec.fieldContext_ProductResponse_deletedAt(ctx, field)
-			case "createdBy":
-				return ec.fieldContext_ProductResponse_createdBy(ctx, field)
 			case "users":
 				return ec.fieldContext_ProductResponse_users(ctx, field)
 			}
@@ -2087,8 +2083,6 @@ func (ec *executionContext) fieldContext_Mutation_createProduct(ctx context.Cont
 				return ec.fieldContext_ProductResponse_updatedAt(ctx, field)
 			case "deletedAt":
 				return ec.fieldContext_ProductResponse_deletedAt(ctx, field)
-			case "createdBy":
-				return ec.fieldContext_ProductResponse_createdBy(ctx, field)
 			case "users":
 				return ec.fieldContext_ProductResponse_users(ctx, field)
 			}
@@ -2184,8 +2178,6 @@ func (ec *executionContext) fieldContext_Mutation_updateProduct(ctx context.Cont
 				return ec.fieldContext_ProductResponse_updatedAt(ctx, field)
 			case "deletedAt":
 				return ec.fieldContext_ProductResponse_deletedAt(ctx, field)
-			case "createdBy":
-				return ec.fieldContext_ProductResponse_createdBy(ctx, field)
 			case "users":
 				return ec.fieldContext_ProductResponse_users(ctx, field)
 			}
@@ -2342,8 +2334,6 @@ func (ec *executionContext) fieldContext_ProductListResponse_products(ctx contex
 				return ec.fieldContext_ProductResponse_updatedAt(ctx, field)
 			case "deletedAt":
 				return ec.fieldContext_ProductResponse_deletedAt(ctx, field)
-			case "createdBy":
-				return ec.fieldContext_ProductResponse_createdBy(ctx, field)
 			case "users":
 				return ec.fieldContext_ProductResponse_users(ctx, field)
 			}
@@ -2837,72 +2827,6 @@ func (ec *executionContext) fieldContext_ProductResponse_deletedAt(ctx context.C
 	return fc, nil
 }
 
-func (ec *executionContext) _ProductResponse_createdBy(ctx context.Context, field graphql.CollectedField, obj *model.ProductResponse) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_ProductResponse_createdBy(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
-		ctx = rctx // use context from middleware stack in children
-		return obj.CreatedBy, nil
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
-		return graphql.Null
-	}
-	res := resTmp.(*model.UserResponse)
-	fc.Result = res
-	return ec.marshalNUserResponse2ᚖgithubᚗcomᚋaltsaqifᚋgoᚑgraphqlᚋgraphᚋmodelᚐUserResponse(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_ProductResponse_createdBy(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "ProductResponse",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			switch field.Name {
-			case "id":
-				return ec.fieldContext_UserResponse_id(ctx, field)
-			case "firstname":
-				return ec.fieldContext_UserResponse_firstname(ctx, field)
-			case "lastname":
-				return ec.fieldContext_UserResponse_lastname(ctx, field)
-			case "email":
-				return ec.fieldContext_UserResponse_email(ctx, field)
-			case "password":
-				return ec.fieldContext_UserResponse_password(ctx, field)
-			case "role":
-				return ec.fieldContext_UserResponse_role(ctx, field)
-			case "createdAt":
-				return ec.fieldContext_UserResponse_createdAt(ctx, field)
-			case "updatedAt":
-				return ec.fieldContext_UserResponse_updatedAt(ctx, field)
-			case "deletedAt":
-				return ec.fieldContext_UserResponse_deletedAt(ctx, field)
-			case "products":
-				return ec.fieldContext_UserResponse_products(ctx, field)
-			}
-			return nil, fmt.Errorf("no field named %q was found under type UserResponse", field.Name)
-		},
-	}
-	return fc, nil
-}
-
 func (ec *executionContext) _ProductResponse_users(ctx context.Context, field graphql.CollectedField, obj *model.ProductResponse) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_ProductResponse_users(ctx, field)
 	if err != nil {
@@ -3311,8 +3235,6 @@ func (ec *executionContext) fieldContext_Query_getProductByID(ctx context.Contex
 				return ec.fieldContext_ProductResponse_updatedAt(ctx, field)
 			case "deletedAt":
 				return ec.fieldContext_ProductResponse_deletedAt(ctx, field)
-			case "createdBy":
-				return ec.fieldContext_ProductResponse_createdBy(ctx, field)
 			case "users":
 				return ec.fieldContext_ProductResponse_users(ctx, field)
 			}
@@ -3408,8 +3330,6 @@ func (ec *executionContext) fieldContext_Query_getProductByStock(ctx context.Con
 				return ec.fieldContext_ProductResponse_updatedAt(ctx, field)
 			case "deletedAt":
 				return ec.fieldContext_ProductResponse_deletedAt(ctx, field)
-			case "createdBy":
-				return ec.fieldContext_ProductResponse_createdBy(ctx, field)
 			case "users":
 				return ec.fieldContext_ProductResponse_users(ctx, field)
 			}
@@ -3834,8 +3754,6 @@ func (ec *executionContext) fieldContext_RegisterResponse_products(ctx context.C
 				return ec.fieldContext_ProductResponse_updatedAt(ctx, field)
 			case "deletedAt":
 				return ec.fieldContext_ProductResponse_deletedAt(ctx, field)
-			case "createdBy":
-				return ec.fieldContext_ProductResponse_createdBy(ctx, field)
 			case "users":
 				return ec.fieldContext_ProductResponse_users(ctx, field)
 			}
@@ -4269,8 +4187,6 @@ func (ec *executionContext) fieldContext_SingleProductResponse_data(ctx context.
 				return ec.fieldContext_ProductResponse_updatedAt(ctx, field)
 			case "deletedAt":
 				return ec.fieldContext_ProductResponse_deletedAt(ctx, field)
-			case "createdBy":
-				return ec.fieldContext_ProductResponse_createdBy(ctx, field)
 			case "users":
 				return ec.fieldContext_ProductResponse_users(ctx, field)
 			}
@@ -5241,8 +5157,6 @@ func (ec *executionContext) fieldContext_UserResponse_products(ctx context.Conte
 				return ec.fieldContext_ProductResponse_updatedAt(ctx, field)
 			case "deletedAt":
 				return ec.fieldContext_ProductResponse_deletedAt(ctx, field)
-			case "createdBy":
-				return ec.fieldContext_ProductResponse_createdBy(ctx, field)
 			case "users":
 				return ec.fieldContext_ProductResponse_users(ctx, field)
 			}
@@ -7631,11 +7545,6 @@ func (ec *executionContext) _ProductResponse(ctx context.Context, sel ast.Select
 			}
 		case "deletedAt":
 			out.Values[i] = ec._ProductResponse_deletedAt(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "createdBy":
-			out.Values[i] = ec._ProductResponse_createdBy(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}

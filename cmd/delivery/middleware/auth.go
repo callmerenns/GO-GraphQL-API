@@ -11,6 +11,7 @@ import (
 	"github.com/altsaqif/go-graphql/cmd/entity"
 	"github.com/altsaqif/go-graphql/cmd/shared/common"
 	"github.com/altsaqif/go-graphql/cmd/shared/service"
+	"github.com/altsaqif/go-graphql/cmd/utils"
 	"github.com/gin-gonic/gin"
 	"github.com/vektah/gqlparser/v2/gqlerror"
 	"gorm.io/gorm"
@@ -19,10 +20,11 @@ import (
 type AuthMiddleware struct {
 	jwtService *service.JwtService
 	db         *gorm.DB
+	Blacklist  utils.Blacklist
 }
 
-func NewAuthMiddleware(jwtService *service.JwtService, db *gorm.DB) *AuthMiddleware {
-	return &AuthMiddleware{jwtService: jwtService, db: db}
+func NewAuthMiddleware(jwtService *service.JwtService, db *gorm.DB, blacklist utils.Blacklist) *AuthMiddleware {
+	return &AuthMiddleware{jwtService: jwtService, db: db, Blacklist: blacklist}
 }
 
 func contains(slice []string, item string) bool {
@@ -46,6 +48,13 @@ func (m *AuthMiddleware) AuthDirective(ctx context.Context, obj interface{}, nex
 	}
 
 	token = strings.TrimPrefix(token, "Bearer ")
+
+	// Check if token is blacklisted
+	if m.Blacklist.IsBlacklisted(token) {
+		common.SendErrorResponse(c, http.StatusUnauthorized, "Token is blacklisted")
+		return nil, fmt.Errorf("token is blacklisted")
+	}
+
 	claims, err := m.jwtService.ValidateToken(token)
 	if err != nil {
 		common.SendErrorResponse(c, http.StatusUnauthorized, "Permission denied!")
@@ -53,8 +62,8 @@ func (m *AuthMiddleware) AuthDirective(ctx context.Context, obj interface{}, nex
 	}
 
 	if !contains(roles, claims.Role) {
-		common.SendErrorResponse(c, http.StatusForbidden, "Only user & admin role is authorized to access this resource")
-		return nil, fmt.Errorf("only user & admin role is authorized to access this resource")
+		common.SendErrorResponse(c, http.StatusForbidden, "Only admin, reseller & customer role is authorized to access this resource")
+		return nil, fmt.Errorf("only admin, reseller & customer role is authorized to access this resource")
 	}
 
 	userID := claims.ID

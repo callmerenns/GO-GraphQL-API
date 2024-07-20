@@ -2,6 +2,7 @@ package graph
 
 import (
 	"github.com/altsaqif/go-graphql/cmd/shared/service"
+	"github.com/altsaqif/go-graphql/cmd/utils"
 	"gorm.io/gorm"
 )
 
@@ -12,4 +13,5 @@ import (
 type Resolver struct {
 	DB         *gorm.DB
 	JwtService *service.JwtService
+	Blacklist  *utils.Blacklist
 }

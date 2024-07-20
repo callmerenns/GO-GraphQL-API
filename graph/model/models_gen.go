@@ -62,7 +62,6 @@ type ProductResponse struct {
 	CreatedAt   string          `json:"createdAt"`
 	UpdatedAt   string          `json:"updatedAt"`
 	DeletedAt   string          `json:"deletedAt"`
-	CreatedBy   *UserResponse   `json:"createdBy"`
 	Users       []*UserResponse `json:"users"`
 }
 

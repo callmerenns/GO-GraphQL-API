@@ -49,7 +49,6 @@ type ProductResponse {
   createdAt: DateTime!
   updatedAt: DateTime!
   deletedAt: DateTime!
-  createdBy: UserResponse!
   users: [UserResponse!]!
 }
 
